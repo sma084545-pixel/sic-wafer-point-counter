@@ -72,6 +72,7 @@ figcaption { color: var(--muted); font-size: .78rem; margin-top: .7rem; }
 .formula small { color: var(--muted); }
 
 .section { padding-block: 5.5rem; }
+.hero, .section { scroll-margin-top: 5.25rem; }
 .section-tinted { background: var(--surface-muted); border-block: .0625rem solid var(--border); }
 .section-heading { display: flex; justify-content: space-between; align-items: end; gap: 2rem; margin-bottom: 2rem; }
 .section h2 { margin: 0; font-size: clamp(1.9rem, 3vw, 2.7rem); line-height: 1.12; letter-spacing: -.03em; }
@@ -145,6 +146,7 @@ footer { padding-block: 2.5rem; background: var(--text); color: #eef6f5; }
   .boundary { grid-template-columns: auto 1fr; align-items: start; }
   .formula { grid-column: 2; min-width: 0; padding: .8rem 0 0; border: 0; border-top: .0625rem solid var(--border); text-align: left; }
   .section { padding-block: 4rem; }
+  .hero, .section { scroll-margin-top: 4.5rem; }
   .pipeline { grid-template-columns: 1fr; }
   .pipeline li { min-height: 5.4rem; border-right: 0; border-bottom: .0625rem solid var(--border); }
   .pipeline li:last-child { border-bottom: 0; }
