@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f5f7f7">
+  <meta name="description" content="在本机运行的 SiC 晶圆 X 射线形貌点状目标分析与复核平台">
+  <title>总览 | SiC 晶圆点状目标分析平台</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}">
+</head>
+<body
+  data-max-upload-mb="{{ max_upload_mb }}"
+  data-version="{{ software_version }}"
+  data-demo-clean="{{ 'true' if demo_available.clean else 'false' }}"
+  data-demo-noisy="{{ 'true' if demo_available.noisy else 'false' }}"
+  data-demo-difficult="{{ 'true' if demo_available.difficult else 'false' }}"
+>
+  <a class="skip-link" href="#main-content">跳到主要内容</a>
+
+  <header class="mobile-header">
+    <a class="mobile-brand" href="#overview" data-nav="overview">SiC 点状目标分析</a>
+    <button class="icon-button" id="mobile-menu-button" type="button" aria-controls="sidebar" aria-expanded="false">
+      <span class="visually-hidden">打开导航</span><span aria-hidden="true">☰</span>
+    </button>
+  </header>
+
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar">
+      <a class="brand" href="#overview" data-nav="overview">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+        <span><strong>SiC 晶圆</strong><small>点状目标分析平台</small></span>
+      </a>
+      <nav aria-label="主要导航">
+        <p class="nav-label">工作区</p>
+        <a href="#overview" data-nav="overview"><span aria-hidden="true">⌂</span>总览</a>
+        <a href="#analyze" data-nav="analyze"><span aria-hidden="true">＋</span>新建分析</a>
+        <a href="#runs" data-nav="runs"><span aria-hidden="true">▤</span>结果记录</a>
+        <p class="nav-label">研究说明</p>
+        <a href="#methods" data-nav="methods"><span aria-hidden="true">△</span>方法与验证</a>
+      </nav>
+      <div class="sidebar-footer">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>仅本机运行</span>
+        <small title="Git {{ git_revision }}">v{{ software_version }}</small>
+      </div>
+    </aside>
+
+    <main id="main-content" class="workspace" tabindex="-1">
+      <section class="view" id="view-overview" data-view="overview">
+        <header class="page-heading">
+          <div>
+            <h1>SiC 晶圆点状目标分析平台</h1>
+            <p>本机传统计算机视觉工作台 · 可追溯候选、有效面积与参数</p>
+          </div>
+          <a class="button primary" href="#analyze">开始新分析</a>
+        </header>
+
+        <section class="boundary-banner" aria-labelledby="boundary-title">
+          <span class="boundary-icon" aria-hidden="true">i</span>
+          <div>
+            <h2 id="boundary-title">科学解释边界</h2>
+            <p>平台统计的是满足当前图像判定与筛选规则的黑色点状目标。只有在材料专家标注或独立实验确认其与位错对应后，结果才可解释为位错密度。</p>
+          </div>
+          <div class="formula" aria-label="点状目标密度等于接受数量除以有效分析面积">
+            <span>ρ = n / S</span><small>单位 cm<sup>−2</sup></small>
+          </div>
+        </section>
+
+        <div class="overview-grid">
+          <section class="panel recent-panel" aria-labelledby="latest-title">
+            <div class="panel-heading">
+              <div><h2 id="latest-title">最近一次可用结果</h2><p>来自 results/ 的持久化记录</p></div>
+              <a href="#runs">全部记录</a>
+            </div>
+            <div id="latest-run" class="empty-state" aria-busy="true">正在读取本机结果…</div>
+          </section>
+
+          <section class="panel pipeline-panel" aria-labelledby="pipeline-title">
+            <div class="panel-heading"><div><h2 id="pipeline-title">分析数据链</h2><p>科研图像通道与显示通道分离</p></div></div>
+            <ol class="pipeline-flow">
+              <li><strong>原始灰度</strong><span>8 / 16 位 / 浮点</span></li>
+              <li><strong>float32</strong><span>全局窗口归一化</span></li>
+              <li><strong>有效掩膜</strong><span>真实轮廓与无效区</span></li>
+              <li><strong>点状候选</strong><span>增强、分割与筛选</span></li>
+              <li><strong>n / S</strong><span>密度与计数区间</span></li>
+            </ol>
+            <p class="callout neutral">16 位或浮点科研图像在检测前保持 float32；uint8 只用于预览与显示。</p>
+          </section>
+        </div>
+
+        <section class="panel" aria-labelledby="recent-runs-title">
+          <div class="panel-heading">
+            <div><h2 id="recent-runs-title">最近运行</h2><p>服务重启后仍可浏览</p></div>
+            <button class="button quiet" id="refresh-runs" type="button">刷新</button>
+          </div>
+          <div class="table-scroll" tabindex="0" aria-label="最近运行表格，可横向滚动">
+            <table>
+              <caption class="visually-hidden">最近的 SiC 晶圆点状目标分析记录</caption>
+              <thead><tr><th scope="col">运行</th><th scope="col">类型</th><th scope="col">状态</th><th scope="col">n</th><th scope="col">S (cm²)</th><th scope="col">ρ (cm⁻²)</th><th scope="col">时间</th></tr></thead>
+              <tbody id="recent-runs-body"><tr><td colspan="7" class="muted-cell">正在读取…</td></tr></tbody>
+            </table>
+          </div>
+        </section>
+      </section>
+
+      <section class="view" id="view-analyze" data-view="analyze" hidden>
+        <header class="page-heading">
+          <div><h1>新建分析</h1><p>图像保留在本机，后台只运行一个分析任务以控制大图内存</p></div>
+        </header>
+
+        <div class="analyze-grid">
+          <section class="panel" aria-labelledby="upload-title">
+            <div class="panel-heading"><div><h2 id="upload-title">输入图像与测量规则</h2><p>PNG / JPG / BMP / TIFF / BigTIFF</p></div></div>
+            <form id="analysis-form" autocomplete="off">
+              <label class="drop-zone" for="image" tabindex="0">
+                <span class="drop-icon" aria-hidden="true">＋</span>
+                <strong>选择晶圆图像</strong>
+                <span id="file-name">点击选择，或将文件拖到此处</span>
+                <small>单文件最大 {{ max_upload_mb }} MB；原始文件不会发送到外部网络</small>
+              </label>
+              <input class="visually-hidden" id="image" name="image" type="file" accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.btf,.bigtif,.bigtiff" required>
+
+              <fieldset>
+                <legend>基础参数</legend>
+                <div class="field-grid">
+                  <label for="wafer-diameter">晶圆实际直径（mm）</label>
+                  <input id="wafer-diameter" name="wafer_diameter_mm" type="number" min="0.001" step="any" value="100" required>
+                  <label for="exclude-edge">排除边缘宽度（mm）</label>
+                  <input id="exclude-edge" name="exclude_edge_mm" type="number" min="0" step="any" value="0" required>
+                  <label for="threshold-method">候选阈值方法</label>
+                  <select id="threshold-method" name="threshold_method">
+                    <option value="otsu" selected>多类 Otsu</option>
+                    <option value="adaptive">自适应阈值</option>
+                    <option value="quantile">分位数阈值</option>
+                  </select>
+                </div>
+                <label class="check-row" for="use-watershed">
+                  <input id="use-watershed" name="use_watershed" type="checkbox" value="true" checked>
+                  <span><strong>启用保守分水岭</strong><small>尝试分离互相接触且具有多个可靠距离峰的候选</small></span>
+                </label>
+              </fieldset>
+
+              <details class="manual-geometry">
+                <summary>自动几何不可靠时使用手工标定</summary>
+                <p>三个值必须同时提供，且均使用原始图像像素坐标。</p>
+                <div class="field-grid three">
+                  <label for="center-x">圆心 x（px）</label><input id="center-x" name="center_x" type="number" min="0" step="any">
+                  <label for="center-y">圆心 y（px）</label><input id="center-y" name="center_y" type="number" min="0" step="any">
+                  <label for="radius-px">半径（px）</label><input id="radius-px" name="radius_px" type="number" min="0.001" step="any">
+                </div>
+              </details>
+              <p id="form-error" class="form-error" role="alert" hidden></p>
+              <button id="submit-analysis" class="button primary wide" type="submit">提交本机分析</button>
+            </form>
+          </section>
+
+          <aside>
+            <section class="panel" aria-labelledby="demo-title">
+              <div class="panel-heading"><div><h2 id="demo-title">合成演示</h2><p>通过真实管线重新分析，不读取真值生成结果</p></div></div>
+              <div class="demo-actions">
+                <button class="button secondary demo-button" data-demo-kind="clean" type="button" {% if not demo_available.clean %}disabled{% endif %}>Clean</button>
+                <button class="button secondary demo-button" data-demo-kind="noisy" type="button" {% if not demo_available.noisy %}disabled{% endif %}>Noisy</button>
+                <button class="button secondary demo-button" data-demo-kind="difficult" type="button" {% if not demo_available.difficult %}disabled{% endif %}>Difficult</button>
+              </div>
+              <p class="callout warning">合成 precision / recall 只验证软件在可控模拟场景中的行为，不能代表真实 SiC 准确率。</p>
+            </section>
+            <section id="job-progress" class="panel progress-panel" aria-labelledby="progress-title" hidden>
+              <div class="panel-heading"><div><h2 id="progress-title">分析状态</h2><p id="progress-text">任务正在排队…</p></div></div>
+              <div class="progress-track" role="progressbar" aria-label="分析进行中"><span></span></div>
+              <dl class="compact-list"><div><dt>队列</dt><dd>单任务</dd></div><div><dt>处理</dt><dd>本机</dd></div><div><dt>进度</dt><dd>不估算虚假百分比</dd></div></dl>
+            </section>
+          </aside>
+        </div>
+      </section>
+
+      <section class="view" id="view-runs" data-view="runs" hidden>
+        <header class="page-heading">
+          <div><h1>结果记录</h1><p>只读取 results/ 下含合法 summary.json 的直接子目录</p></div>
+          <button class="button secondary" id="refresh-history" type="button">刷新记录</button>
+        </header>
+        <section class="panel">
+          <div class="history-summary" id="history-summary">正在读取本机记录…</div>
+          <div class="table-scroll" tabindex="0" aria-label="全部分析记录，可横向滚动">
+            <table class="history-table">
+              <caption class="visually-hidden">全部可用分析运行</caption>
+              <thead><tr><th scope="col">输入与运行 ID</th><th scope="col">数据类型</th><th scope="col">状态</th><th scope="col">接受 n</th><th scope="col">有效面积 S</th><th scope="col">密度 ρ</th><th scope="col">验证状态</th><th scope="col">运行时间</th></tr></thead>
+              <tbody id="history-body"><tr><td colspan="8" class="muted-cell">正在读取…</td></tr></tbody>
+            </table>
+          </div>
+          <div id="history-diagnostics" class="callout neutral" hidden></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-result" data-view="result" hidden>
+        <header class="result-heading">
+          <div>
+            <a class="back-link" href="#runs">← 返回结果记录</a>
+            <h1 id="result-title">分析结果</h1>
+            <p id="result-subtitle">正在读取…</p>
+          </div>
+          <span id="result-validation-badge" class="status-badge warning">验证状态未提供</span>
+        </header>
+
+        <section class="metric-strip" id="result-metrics" aria-label="核心测量结果"></section>
+
+        <div id="result-error" class="callout error" role="alert" hidden></div>
+        <section id="result-main" class="result-grid" hidden>
+          <div class="panel image-panel">
+            <div class="panel-heading">
+              <div><h2>晶圆图像与检测结果</h2><p id="image-caption">带编号的接受目标叠加图</p></div>
+              <label class="compact-control" for="image-artifact">显示图层
+                <select id="image-artifact"></select>
+              </label>
+            </div>
+            <div class="wafer-viewer"><img id="result-image" alt="" width="1200" height="900" decoding="async"></div>
+            <p id="image-missing" class="empty-state" hidden>该运行没有保存此图像。</p>
+          </div>
+
+          <aside class="panel metadata-panel">
+            <div class="panel-heading"><div><h2>分析与标定信息</h2><p>缺失字段明确显示“未提供”</p></div></div>
+            <div id="result-metadata"></div>
+            <div id="result-warnings" class="callout warning" hidden></div>
+          </aside>
+        </section>
+
+        <section class="panel artifact-panel" id="artifact-panel" hidden>
+          <div class="panel-heading"><div><h2>报告与可复核文件</h2><p>文件来自本次独立结果目录</p></div></div>
+          <div id="artifact-links" class="artifact-links"></div>
+        </section>
+
+        <section class="panel candidate-browser" id="candidate-browser" hidden aria-labelledby="candidate-title">
+          <div class="panel-heading">
+            <div><h2 id="candidate-title">候选浏览器</h2><p>服务端分页读取 defects_all.csv，不把整表载入浏览器</p></div>
+            <span id="candidate-total" class="count-label">—</span>
+          </div>
+          <form id="candidate-filters" class="filter-bar" autocomplete="off">
+            <label for="candidate-status">状态<select id="candidate-status" name="status"><option value="all">全部</option><option value="accepted">已接受</option><option value="rejected">已拒绝</option></select></label>
+            <label for="candidate-reason">拒绝原因<select id="candidate-reason" name="reason"><option value="">全部原因</option></select></label>
+            <label for="candidate-id">缺陷 ID<input id="candidate-id" name="defect_id" inputmode="numeric" placeholder="精确 ID"></label>
+            <label for="candidate-page-size">每页<select id="candidate-page-size" name="page_size"><option>25</option><option selected>50</option><option>100</option><option>200</option></select></label>
+            <button class="button secondary" type="submit">应用筛选</button>
+          </form>
+          <div class="table-scroll candidate-table-wrap" tabindex="0" aria-label="候选明细表，可横向滚动">
+            <table class="candidate-table">
+              <caption class="visually-hidden">当前筛选条件下的点状目标候选</caption>
+              <thead><tr><th scope="col">ID</th><th scope="col">缩略图</th><th scope="col">x (mm)</th><th scope="col">y (mm)</th><th scope="col">等效直径</th><th scope="col">圆度</th><th scope="col">对比度</th><th scope="col">距有效边界</th><th scope="col">自动判定</th><th scope="col">拒绝原因</th></tr></thead>
+              <tbody id="candidate-body"><tr><td colspan="10" class="muted-cell">选择一个完成的运行以读取候选。</td></tr></tbody>
+            </table>
+          </div>
+          <div id="candidate-cards" class="candidate-cards"></div>
+          <nav class="pagination" aria-label="候选分页">
+            <button class="button quiet" id="candidate-first" type="button">首页</button>
+            <button class="button quiet" id="candidate-prev" type="button">上一页</button>
+            <span id="candidate-page-status">第 — 页</span>
+            <button class="button quiet" id="candidate-next" type="button">下一页</button>
+            <button class="button quiet" id="candidate-last" type="button">末页</button>
+          </nav>
+        </section>
+
+        <section class="panel" id="spatial-panel" hidden>
+          <div class="panel-heading"><div><h2>面积归一化空间分布</h2><p>每个 bin 的面积来自最终 valid_analysis_mask</p></div></div>
+          <div id="spatial-figures" class="figure-grid"></div>
+          <p class="callout neutral">方位角以图像正 x 轴为参考；没有 notch、flat 或晶向元数据时，不应把角度解释为晶体学方向。</p>
+        </section>
+      </section>
+
+      <section class="view" id="view-methods" data-view="methods" hidden>
+        <header class="page-heading"><div><h1>方法、验证与可重复性</h1><p>面向研究复核的测量定义，而不是物理结论自动化</p></div></header>
+        <div class="methods-grid">
+          <section class="panel">
+            <h2>测量定义</h2>
+            <div class="method-formula"><span>n</span><small>当前规则接受的点状目标数</small><b>÷</b><span>S</span><small>最终有效像素掩膜面积</small><b>=</b><span>ρ</span><small>点状目标密度 cm<sup>−2</sup></small></div>
+            <p>S 不是无条件使用 78.5398 cm²，而是由真实晶圆轮廓、边缘排除区、notch / flat、遮挡和用户无效区共同决定。</p>
+          </section>
+          <section class="panel">
+            <h2>处理流程</h2>
+            <ol class="numbered-steps"><li>以全局分位数窗口将原始灰度映射为 float32。</li><li>在预览图检测晶圆并映射回原图标定 100 mm。</li><li>构建最终有效分析掩膜，按有效像素计算 S。</li><li>背景校正、多尺度暗目标增强与阈值产生候选。</li><li>可选保守分水岭处理粘连，形态与对比度规则筛选。</li><li>保存全部候选、拒绝原因、裁剪、叠加图与配置。</li></ol>
+          </section>
+          <section class="panel validation-card">
+            <h2>真实数据验证状态</h2>
+            <strong>当前未在真实 SiC 专家标注数据上完成性能验证</strong>
+            <p>合成 clean / noisy / difficult 测试证明软件行为可重复，并不能证明真实图像 precision、recall 或物理位错识别准确率。</p>
+            <p>真实验证必须按 wafer_id 分离 calibration、validation 与 locked test，保留多标注者原始标签与分歧。</p>
+          </section>
+          <section class="panel">
+            <h2>不确定度分账</h2>
+            <dl class="uncertainty-list"><div><dt>计数波动</dt><dd>√n / S 与 Garwood 95% 区间</dd></div><div><dt>分类不确定度</dt><dd>需要真实专家标注后按晶圆 bootstrap</dd></div><div><dt>参数敏感性</dt><dd>需要在校准晶圆上做局部扰动</dd></div><div><dt>面积与标定</dt><dd>未提供直径、像素尺度及掩膜边界误差时不量化</dd></div><div><dt>空间异质性</dt><dd>径向与角向仅做有效面积归一化描述</dd></div></dl>
+          </section>
+        </div>
+        <section class="panel reproducibility-panel">
+          <h2>可重复性记录</h2>
+          <p>每次分析保留 <code>analysis_config.yaml</code>、<code>resolved_physical_parameters.yaml</code>、软件版本、归一化窗口、完整候选 CSV、运行日志和报告。默认阈值是软件起点，不是跨设备、衍射条件和材料批次的普适物理标准。</p>
+          <p>当前平台版本：<code>v{{ software_version }}</code>；Git 提交：<code>{{ git_revision }}</code>。</p>
+        </section>
+      </section>
+    </main>
+  </div>
+
+  <nav class="mobile-nav" aria-label="移动端导航">
+    <a href="#overview" data-nav="overview"><span aria-hidden="true">⌂</span>总览</a>
+    <a href="#analyze" data-nav="analyze"><span aria-hidden="true">＋</span>新分析</a>
+    <a href="#runs" data-nav="runs"><span aria-hidden="true">▤</span>结果</a>
+    <a href="#methods" data-nav="methods"><span aria-hidden="true">△</span>方法</a>
+  </nav>
+
+  <div id="live-region" class="visually-hidden" aria-live="polite" aria-atomic="true"></div>
+  <div id="alert-region" class="toast" role="alert" hidden></div>
+  <script type="module" src="{{ url_for('static', filename='app.js') }}"></script>
+</body>
+</html>

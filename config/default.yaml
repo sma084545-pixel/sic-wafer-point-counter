@@ -1,0 +1,98 @@
+wafer:
+  diameter_mm: 100.0
+  exclude_edge_mm: 0.0
+  detection_min_confidence: 0.55
+  invalid_regions: []
+
+io:
+  preview_max_size: 2000
+  tile_size: 2048
+  tile_overlap: 128
+  normalization_low_percentile: 1.0
+  normalization_high_percentile: 99.0
+  respect_tiff_photometric: true
+  large_image_threshold_pixels: 25000000
+  max_overlay_size: 6000
+
+preprocessing:
+  # Optional physical alternatives take precedence when supplied.  They are
+  # converted once using the fitted wafer scale and logged separately.
+  # background_kernel_um: 1000.0
+  # gaussian_sigma_um: 10.0
+  median_kernel: 3
+  gaussian_sigma: 1.0
+  background_method: morphological
+  background_kernel_px: 101
+  background_gaussian_sigma: 31.0
+  use_clahe: false
+  clahe_clip_limit: 2.0
+  clahe_grid_size: 8
+  suppress_stripes: false
+  stripe_axis: horizontal
+  stripe_smoothing_px: 51
+
+detection:
+  # Optional: blackhat_kernel_sizes_um: [90.0, 170.0, 310.0]
+  # Optional: min_peak_distance_um, dog_min_sigma_um, dog_max_sigma_um
+  method: blackhat
+  threshold_method: otsu
+  otsu_classes: 3
+  threshold_offset: 0.0
+  threshold_quantile: 99.2
+  adaptive_block_size: 51
+  adaptive_c: -2.0
+  min_area_px: 5
+  max_area_px: 5000
+  opening_kernel_px: 1
+  closing_kernel_px: 3
+  use_watershed: true
+  min_peak_distance_px: 5
+  watershed_compactness: 0.0
+  watershed_min_component_area_px: 20
+  watershed_max_aspect_ratio: 4.0
+  watershed_max_eccentricity: 0.92
+  watershed_min_component_circularity: 0.20
+  watershed_min_peak_rel_height: 0.35
+  blackhat_kernel_sizes_px: [9, 17, 31]
+  dog_min_sigma_px: 1.0
+  dog_max_sigma_px: 6.0
+  dog_sigma_ratio: 1.6
+  dog_threshold: 0.04
+  combine_mode: union
+
+filters:
+  # Optional: min/max_equivalent_diameter_um, min/max_area_um2,
+  # local_background_ring_um, min_edge_distance_um.
+  min_area_px: 5
+  max_area_px: 1500
+  min_equivalent_diameter_px: 2.0
+  max_equivalent_diameter_px: 45.0
+  min_circularity: 0.25
+  max_eccentricity: 0.92
+  max_aspect_ratio: 4.0
+  min_solidity: 0.60
+  min_contrast: 0.02
+  min_edge_distance_mm: 0.0
+  min_valid_fraction: 0.95
+  local_background_ring_px: 5
+
+output:
+  save_intermediates: true
+  draw_labels: true
+  draw_rejected: true
+  generate_html_report: true
+  generate_heatmap: true
+  save_candidate_crops: true
+  crop_half_size_px: 32
+
+spatial:
+  radial_bin_mode: equal_area
+  radial_bin_count: 6
+  angular_sector_count: 12
+  regions:
+    center: [0.00, 0.33]
+    middle: [0.33, 0.67]
+    edge: [0.67, 1.00]
+
+logging:
+  level: INFO

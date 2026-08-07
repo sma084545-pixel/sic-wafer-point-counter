@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="SiC 晶圆 XRT 黑色点状目标的传统计算机视觉分析、可追溯计数与实际有效面积密度计算平台。">
+  <meta name="theme-color" content="#f5f7f7">
+  <title>SiC 晶圆 XRT 点状目标分析平台</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/showcase.css?v=20260807">
+</head>
+<body>
+  <a class="skip-link" href="#content">跳到主要内容</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="#top" aria-label="SiC 晶圆点状目标分析平台首页">
+        <svg class="brand-mark" aria-hidden="true" viewBox="0 0 42 42">
+          <circle cx="21" cy="7" r="3"></circle><circle cx="21" cy="35" r="3"></circle>
+          <circle cx="7" cy="21" r="3"></circle><circle cx="35" cy="21" r="3"></circle>
+          <circle cx="11" cy="11" r="2.5"></circle><circle cx="31" cy="11" r="2.5"></circle>
+          <circle cx="11" cy="31" r="2.5"></circle><circle cx="31" cy="31" r="2.5"></circle>
+          <circle class="brand-mark-core" cx="21" cy="21" r="6"></circle>
+        </svg>
+        <span><strong>SiC 晶圆</strong><small>点状目标分析平台</small></span>
+      </a>
+      <nav aria-label="主要导航">
+        <ul role="list">
+          <li><a href="#capabilities">项目能力</a></li>
+          <li><a href="#method">方法与可靠性</a></li>
+          <li><a href="#demo">合成演示</a></li>
+          <li><a href="#use">安装使用</a></li>
+        </ul>
+      </nav>
+      <a class="button button-compact" href="https://github.com/sma084545-pixel/sic-wafer-point-counter">查看 GitHub</a>
+    </div>
+  </header>
+
+  <main id="content" tabindex="-1">
+    <section class="hero" id="top">
+      <div class="shell hero-grid">
+        <div class="hero-copy">
+          <h1>从 XRT 灰度图像到可复核的点状目标密度</h1>
+          <p class="hero-lead">面向 100 mm SiC 晶圆的透明传统计算机视觉流程。保留 16 位科研灰度、使用实际有效掩膜计算面积，并为每个候选保存位置、形态、判定与拒绝原因。</p>
+          <div class="hero-actions">
+            <a class="button" href="#demo">查看合成结果</a>
+            <a class="text-link" href="#use">获取并运行项目 <span aria-hidden="true">→</span></a>
+          </div>
+          <dl class="hero-facts">
+            <div><dt>输入</dt><dd>PNG · TIFF · BigTIFF</dd></div>
+            <div><dt>科研通道</dt><dd>float32 [0,1]</dd></div>
+            <div><dt>核心验证</dt><dd>52 tests passed</dd></div>
+          </dl>
+        </div>
+        <figure class="hero-figure">
+          <img src="showcase_design/implementation-result-desktop.png"
+               alt="本机分析工作台结果页，显示合成晶圆叠加图、96 个接受目标、有效面积和密度"
+               width="1440" height="900" fetchpriority="high">
+          <figcaption>本机工作台的 clean 合成结果；图中数值来自真实分析管线，不是静态占位数据。</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="boundary shell" aria-labelledby="boundary-title">
+      <div class="boundary-icon" aria-hidden="true">i</div>
+      <div>
+        <h2 id="boundary-title">科学解释边界</h2>
+        <p>程序统计的是“满足当前图像判定和筛选标准的黑色点状目标”。黑点不会自动成为物理意义上的位错。只有材料专家标注或独立实验确认图像目标与位错具有对应关系后，<var>ρ = n / S</var> 才可以作为位错密度解释。</p>
+      </div>
+      <div class="formula" aria-label="密度 rho 等于接受目标数量 n 除以有效分析面积 S">
+        <span>ρ = n / S</span><small>单位 cm<sup>−2</sup></small>
+      </div>
+    </section>
+
+    <section class="section shell" id="capabilities">
+      <div class="section-heading">
+        <div><h2>一条可追溯的科研数据链</h2><p>分析与显示通道分离；每一步都保留参数、掩膜、候选和警告。</p></div>
+      </div>
+      <ol class="pipeline" aria-label="分析流程">
+        <li><strong>原始灰度</strong><span>8 / 16 位 / 浮点</span></li>
+        <li><strong>float32</strong><span>全局分位归一化</span></li>
+        <li><strong>有效掩膜</strong><span>真实轮廓与无效区</span></li>
+        <li><strong>点状候选</strong><span>增强、分割与筛选</span></li>
+        <li><strong>n / S</strong><span>密度与计数区间</span></li>
+      </ol>
+
+      <div class="capability-grid">
+        <article>
+          <h3>大图与灰度精度</h3>
+          <p>TIFF/BigTIFF 优先使用 tifffile，支持 memory-map、可选 pyvips 与重叠 tile。16 位或浮点科研图像在检测前不会被压缩为 8 位。</p>
+        </article>
+        <article>
+          <h3>实际有效面积</h3>
+          <p><var>S</var> 来自最终 <code>valid_analysis_mask</code> 的有效像素，而不是无条件套用 78.5398 cm²。缺口、平边、裁剪、边缘排除和无效区都会改变面积。</p>
+        </article>
+        <article>
+          <h3>候选级审计</h3>
+          <p>每个目标都有独立编号、像素与毫米坐标、面积、直径、圆度、离心率、对比度、边界距离、接受状态和拒绝原因。</p>
+        </article>
+        <article>
+          <h3>人工与专家验证</h3>
+          <p>输出编号叠加图、候选 CSV 和局部裁剪；支持逐个复核以及按晶圆划分校准、验证和锁定测试集，避免同片晶圆跨集合泄漏。</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="section section-tinted" id="method">
+      <div class="shell method-grid">
+        <div>
+          <h2>面积、密度与不确定度各自有边界</h2>
+          <p>对于拟合直径为 <var>D<sub>px</sub></var> 的 100 mm 晶圆，程序先建立像素物理标定，再按最终掩膜逐像素求和。</p>
+          <div class="equations" aria-label="物理标定和密度公式">
+            <code>mm_per_pixel = 100 / D_px</code>
+            <code>S = N_valid_pixels × (cm_per_pixel)²</code>
+            <code>ρ = n / S</code>
+            <code>σ_counting = √n / S</code>
+          </div>
+        </div>
+        <div class="reliability-list">
+          <article><span>01</span><div><h3>几何不可靠时拒绝输出</h3><p>圆度、拟合残差、尺寸合理性或裁剪风险不满足要求时会显式警告，不继续生成看似精确的密度。</p></div></article>
+          <article><span>02</span><div><h3>计数区间不是总误差</h3><p>Poisson / Garwood 区间只反映有限计数波动，不包含漏检、误检、参数选择、面积标定或物理判定错误。</p></div></article>
+          <article><span>03</span><div><h3>真实准确率尚待专家标注</h3><p>合成数据可验证算法行为和回归稳定性，不能证明真实 SiC 图像的 precision、recall 或位错对应关系。</p></div></article>
+        </div>
+      </div>
+    </section>
+
+    <section class="section shell" id="demo">
+      <div class="section-heading split-heading">
+        <div><h2>固定种子的 clean 合成演示</h2><p>模拟晶圆经过与真实图像相同的 <code>analyze_image</code> 管线；测试不会读取真值来生成检测结果。</p></div>
+        <span class="validation-state">未在真实 SiC 专家标注上验证</span>
+      </div>
+      <div class="metric-row" aria-label="合成 clean 分析结果">
+        <div><span>接受目标 n</span><strong>96</strong><small>个</small></div>
+        <div><span>有效面积 S</span><strong>78.7001</strong><small>cm²</small></div>
+        <div><span>点状目标密度 ρ</span><strong>1.21982</strong><small>cm<sup>−2</sup></small></div>
+        <div><span>自动化测试</span><strong>52 / 52</strong><small>passed</small></div>
+      </div>
+      <div class="demo-grid">
+        <figure>
+          <img src="showcase_design/implementation-result-desktop.png"
+               alt="桌面结果页，显示合成晶圆叠加图、候选统计、面积与不确定度"
+               width="1440" height="900" loading="lazy">
+          <figcaption>桌面结果：指标、科学警告、叠加图与候选分页在同一审计视图中。</figcaption>
+        </figure>
+        <figure>
+          <img src="showcase_design/implementation-result-mobile.png"
+               alt="移动端结果页，指标与晶圆叠加图按窄屏顺序排列"
+               width="390" height="844" loading="lazy">
+          <figcaption>移动端结果：保留核心指标和科学边界，不把候选表格压缩成不可读小字。</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <section class="section section-tinted" id="use">
+      <div class="shell use-grid">
+        <div>
+          <h2>下载后在本机运行完整分析</h2>
+          <p>GitHub Pages 是只读展示页。图像上传、TIFF 处理、候选检测和报告生成仍在本机 Python 环境中执行，不会把科研原图发送到本网站。</p>
+          <div class="code-block" role="region" aria-label="安装与运行命令" tabindex="0"><pre><code>git clone https://github.com/sma084545-pixel/sic-wafer-point-counter.git
+cd sic-wafer-point-counter
+python3.10 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[test]"
+python scripts/generate_synthetic_wafer.py --all --output-dir sample_data/generated
+python -m pytest -q
+.venv/bin/python -m sic_wafer_counter.cli web --workspace .</code></pre></div>
+          <p class="local-note">然后访问 <code>http://127.0.0.1:8765/</code>。本机工作台刻意只监听回环地址。</p>
+        </div>
+        <aside class="public-scope" aria-labelledby="scope-title">
+          <h3 id="scope-title">公开仓库的边界</h3>
+          <dl>
+            <div><dt>包含</dt><dd>源代码、配置、测试、科研说明、合成演示设计与静态站点</dd></div>
+            <div><dt>不包含</dt><dd>真实 TIFF、真实候选裁剪、分析结果目录、上传缓存、虚拟环境和本机日志</dd></div>
+            <div><dt>静态网址</dt><dd>展示方法与合成结果，不执行 Python 分析</dd></div>
+          </dl>
+          <a class="button button-full" href="https://github.com/sma084545-pixel/sic-wafer-point-counter">浏览全部公开项目文件</a>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-inner">
+      <div><strong>SiC 晶圆点状目标分析平台</strong><p>透明、可调、可复核的科研图像计数工具。</p></div>
+      <p>研究用途 · 结果必须结合材料专家判断</p>
+    </div>
+  </footer>
+</body>
+</html>

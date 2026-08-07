@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sic-wafer-point-counter"
+version = "0.1.0"
+description = "Auditable traditional-CV counting of dark point-like targets on SiC wafer X-ray topographs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "SiC wafer point counter contributors"}]
+dependencies = [
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "scikit-image>=0.21",
+  "opencv-python-headless>=4.8",
+  "tifffile>=2023.7",
+  "Pillow>=10",
+  "PyYAML>=6",
+  "pandas>=2",
+  "matplotlib>=3.7",
+  "Jinja2>=3.1",
+  "Flask>=3.0,<4",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.4", "pytest-cov>=4"]
+large-image = ["pyvips>=2.2"]
+
+[project.scripts]
+sic-wafer-counter = "sic_wafer_counter.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+sic_wafer_counter = ["resources/*.yaml", "templates/*.html", "static/*.css", "static/*.js", "static/*.svg"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
