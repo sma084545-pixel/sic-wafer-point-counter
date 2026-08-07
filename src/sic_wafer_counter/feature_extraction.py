@@ -354,10 +354,16 @@ def valid_boundary_distance_transform(
         raise ValueError("valid_mask must be a two-dimensional array")
     if not np.any(mask):
         raise ValueError("valid_mask contains no valid pixels")
-    return np.asarray(
-        cv2.distanceTransform(mask, cv2.DIST_L2, cv2.DIST_MASK_PRECISE),
-        dtype=np.float32,
+    # OpenCV does not treat pixels beyond an array edge as background.  Pad
+    # explicitly so a valid region cropped by the source-image boundary has
+    # the same distance semantics as the tiled boundary index.
+    padded = np.pad(mask, 1, mode="constant", constant_values=0)
+    distance = cv2.distanceTransform(
+        padded,
+        cv2.DIST_L2,
+        cv2.DIST_MASK_PRECISE,
     )
+    return np.asarray(distance[1:-1, 1:-1], dtype=np.float32)
 
 
 def extract_candidate_features(

@@ -31,6 +31,7 @@ let selectedFile = null;
 let worker = null;
 let objectUrls = [];
 let manifest = null;
+let runGeneration = 0;
 
 function setStatus(kind, title, message, value = null) {
   statusBox.className = `status-box ${kind ? `is-${kind}` : ""}`;
@@ -49,10 +50,41 @@ function humanBytes(value) {
   return `${(value / 1048576).toFixed(1)} MiB`;
 }
 
+function selectionLimitBytes() {
+  return Number(manifest?.limits?.selection?.max_file_bytes);
+}
+
+function refreshStartButton() {
+  const limit = selectionLimitBytes();
+  const fileIsEligible = selectedFile && Number.isFinite(limit) && selectedFile.size > 0 && selectedFile.size <= limit;
+  analyzeButton.disabled = Boolean(worker) || !fileIsEligible;
+  fileInput.disabled = Boolean(worker);
+  dropZone.setAttribute("aria-disabled", String(Boolean(worker)));
+}
+
 function setSelectedFile(file) {
   selectedFile = file;
   fileLine.textContent = file ? `${file.name} · ${humanBytes(file.size)}` : "尚未选择文件";
-  if (file) setStatus("", "图像已就绪", "确认物理标定与检测参数后开始。", 0);
+  if (!file) {
+    setStatus("", "等待图像", "选择图像并确认参数后开始。", 0);
+  } else if (!manifest) {
+    setStatus("", "文件已选择", "正在读取浏览器安全清单；尚未读取图像像素。", null);
+  } else if (file.size > selectionLimitBytes()) {
+    setStatus(
+      "error",
+      "文件超过网页选择上限",
+      `${humanBytes(file.size)} 超过 ${humanBytes(selectionLimitBytes())}。未读取图像、未压缩或降采样，也未生成密度；请使用本机工作台。`,
+      0,
+    );
+  } else {
+    setStatus(
+      "",
+      "文件已选择",
+      "开始后将在 Worker 内核对 TIFF axes、源分辨率和内存分层；科研分析保持原始分辨率。",
+      0,
+    );
+  }
+  refreshStartButton();
 }
 
 function cleanupObjectUrls() {
@@ -68,11 +100,13 @@ function makeUrl(buffer, mime) {
 
 function validateFile(file) {
   if (!file) throw new Error("请先选择晶圆图像。 ");
-  if (!/\.(png|jpe?g|bmp|tiff?)$/i.test(file.name)) {
-    throw new Error("仅支持 PNG、JPG、JPEG、BMP、TIF 和 TIFF。 ");
+  if (!/\.(png|jpe?g|bmp|tiff?|btf|bigtiff?)$/i.test(file.name)) {
+    throw new Error("仅支持 PNG、JPG、JPEG、BMP、TIF、TIFF 和 BigTIFF。 ");
   }
-  if (manifest && file.size > manifest.limits.max_file_bytes) {
-    throw new Error(`文件为 ${humanBytes(file.size)}，超过浏览器模式 ${humanBytes(manifest.limits.max_file_bytes)} 上限；请使用本机工作台。`);
+  if (!manifest) throw new Error("浏览器安全清单尚未就绪，请稍后重试。 ");
+  if (file.size <= 0) throw new Error("文件为空，无法分析。 ");
+  if (file.size > selectionLimitBytes()) {
+    throw new Error(`文件为 ${humanBytes(file.size)}，超过网页 ${humanBytes(selectionLimitBytes())} 选择上限；请使用本机工作台。`);
   }
 }
 
@@ -96,9 +130,11 @@ function readOptions() {
 }
 
 function errorMessage(raw) {
-  const message = String(raw || "未知错误");
+  const detail = raw && typeof raw === "object" ? raw : { message: raw };
+  const message = String(detail.message || "未知错误");
   if (/memory|out of bounds|allocation/i.test(message)) return "浏览器内存不足，分析已安全停止且未输出密度。请缩小图像或使用本机大图工作台。";
-  return message.split("\n").filter(Boolean).slice(-1)[0];
+  const concise = message.split("\n").filter(Boolean).slice(-1)[0];
+  return detail.recovery ? `${concise} ${detail.recovery}` : concise;
 }
 
 function formatNumber(value, digits = 6) {
@@ -168,7 +204,7 @@ function showArtifacts(payload) {
   bundleDownload.download = payload.bundleName;
 
   const downloads = document.querySelector("#download-list");
-  downloads.replaceChildren(...Object.keys(urls).sort().map((name) => {
+  const inlineItems = Object.keys(urls).sort().map((name) => {
     const item = document.createElement("li");
     const link = document.createElement("a");
     link.href = urls[name];
@@ -176,7 +212,16 @@ function showArtifacts(payload) {
     link.textContent = name;
     item.append(link);
     return item;
-  }));
+  });
+  const bundleOnlyItems = (payload.bundleOnlyArtifacts || []).sort().map((name) => {
+    const item = document.createElement("li");
+    const label = document.createElement("span");
+    label.className = "bundle-only-file";
+    label.textContent = `${name} · 仅 ZIP（避免大文件重复占用浏览器内存）`;
+    item.append(label);
+    return item;
+  });
+  downloads.replaceChildren(...inlineItems, ...bundleOnlyItems);
   results.hidden = false;
   results.scrollIntoView({ behavior: "smooth", block: "start" });
 }
@@ -184,24 +229,29 @@ function showArtifacts(payload) {
 function stopWorker() {
   if (worker) worker.terminate();
   worker = null;
-  analyzeButton.disabled = false;
   demoButton.disabled = false;
   cancelButton.hidden = true;
+  refreshStartButton();
 }
 
 async function runAnalysis(event) {
   event.preventDefault();
+  const runFile = selectedFile;
+  const generation = ++runGeneration;
   try {
-    validateFile(selectedFile);
+    validateFile(runFile);
     const options = readOptions();
     results.hidden = true;
     cleanupObjectUrls();
     analyzeButton.disabled = true;
     demoButton.disabled = true;
+    fileInput.disabled = true;
+    dropZone.setAttribute("aria-disabled", "true");
     cancelButton.hidden = false;
-    setStatus("running", "正在准备分析", "正在把图像写入当前标签页的临时科研运行环境…", 0.01);
+    setStatus("running", "正在准备分析", "正在把只读 File 交给独立 Worker；尚未复制到 Python 内存。", null);
     worker = new Worker("assets/analysis-worker.mjs", { type: "module" });
     worker.addEventListener("message", (messageEvent) => {
+      if (generation !== runGeneration) return;
       const payload = messageEvent.data;
       if (payload.type === "status") {
         setStatus("running", "分析进行中", payload.message, payload.progress);
@@ -210,26 +260,37 @@ async function runAnalysis(event) {
         setStatus("complete", "分析完成", "报告、对照细节图、整片密度热图和审计文件已生成。", 1);
         stopWorker();
       } else if (payload.type === "error") {
-        setStatus("error", "分析已安全停止", `${errorMessage(payload.message)} 未生成或展示可能误导的密度结果。`, 0);
+        results.hidden = true;
+        cleanupObjectUrls();
+        setStatus("error", "分析已安全停止", `${errorMessage(payload.error || payload.message)} 未生成或展示可能误导的密度结果。`, 0);
         stopWorker();
       }
     });
     worker.addEventListener("error", (error) => {
+      if (generation !== runGeneration) return;
+      results.hidden = true;
+      cleanupObjectUrls();
       setStatus("error", "运行环境启动失败", `${errorMessage(error.message)} 请检查网络后重试，或使用本机工作台。`, 0);
       stopWorker();
     });
-    const fileBuffer = await selectedFile.arrayBuffer();
-    worker.postMessage({ type: "analyze", fileName: selectedFile.name, fileBuffer, options }, [fileBuffer]);
+    worker.postMessage({ type: "analyze", file: runFile, options });
   } catch (error) {
+    if (generation !== runGeneration) return;
+    results.hidden = true;
     setStatus("error", "无法开始分析", errorMessage(error.message), 0);
     stopWorker();
   }
 }
 
 fileInput.addEventListener("change", () => setSelectedFile(fileInput.files?.[0] || null));
-for (const eventName of ["dragenter", "dragover"]) dropZone.addEventListener(eventName, (event) => { event.preventDefault(); dropZone.classList.add("is-dragging"); });
+for (const eventName of ["dragenter", "dragover"]) dropZone.addEventListener(eventName, (event) => {
+  event.preventDefault();
+  if (!worker) dropZone.classList.add("is-dragging");
+});
 for (const eventName of ["dragleave", "drop"]) dropZone.addEventListener(eventName, (event) => { event.preventDefault(); dropZone.classList.remove("is-dragging"); });
-dropZone.addEventListener("drop", (event) => setSelectedFile(event.dataTransfer?.files?.[0] || null));
+dropZone.addEventListener("drop", (event) => {
+  if (!worker) setSelectedFile(event.dataTransfer?.files?.[0] || null);
+});
 demoButton.addEventListener("click", async () => {
   try {
     setStatus("running", "正在载入合成样本", "该样本固定随机种子，预期接受 96 个点状目标。", null);
@@ -242,9 +303,10 @@ demoButton.addEventListener("click", async () => {
   }
 });
 cancelButton.addEventListener("click", () => {
+  runGeneration += 1;
   stopWorker();
   results.hidden = true;
-  setStatus("", "本次运行已取消", "临时运行环境已释放；可以重新开始。", 0);
+  setStatus("", "本次运行已取消", "临时运行环境已释放；所选文件和参数已保留，可以重新开始。", 0);
 });
 form.addEventListener("submit", runAnalysis);
 window.addEventListener("pagehide", () => { stopWorker(); cleanupObjectUrls(); });
@@ -257,7 +319,10 @@ fetch("assets/runtime/manifest.json", { cache: "no-cache" })
   .then((value) => {
     manifest = value;
     const limits = value.limits;
-    document.querySelector("#browser-limits").textContent = `浏览器安全上限：${humanBytes(limits.max_file_bytes)}、${limits.max_pixels.toLocaleString("zh-CN")} 像素、单边 ${limits.max_dimension_px.toLocaleString("zh-CN")} px。超出时明确拒绝并引导本机分块分析。`;
+    const raster = limits.raster_full_array;
+    const tiff = limits.tiff_bounded;
+    document.querySelector("#browser-limits").textContent = `网页可选择至 ${humanBytes(limits.selection.max_file_bytes)}。普通栅格限 ${raster.max_pixels.toLocaleString("zh-CN")} 像素；具有有界随机访问能力的 TIFF/BigTIFF 限 ${tiff.max_pixels.toLocaleString("zh-CN")} 像素、单边 ${tiff.max_dimension_px.toLocaleString("zh-CN")} px，并以 ${tiff.tile_size_px} px 重叠 tile 全分辨率分析。不会静默压缩或降采样。`;
+    setSelectedFile(selectedFile);
   })
   .catch(() => {
     document.querySelector("#browser-limits").textContent = "无法读取浏览器运行清单；开始分析前请刷新页面。";

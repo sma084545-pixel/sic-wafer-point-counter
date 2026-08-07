@@ -1,11 +1,11 @@
 """Memory-conscious grayscale image input for wafer topographs.
 
-TIFF/BigTIFF files are opened with :mod:`tifffile` first.  Uncompressed,
-contiguous TIFF data are exposed through a read-only memory map; compressed
-data use optional pyvips random access when available, otherwise tifffile must
-decode the full array and the limitation is recorded in the metadata.  Large
-images can remain preview-only and be normalized one overlapping tile at a
-time using a single set of preview-derived percentile limits.
+TIFF/BigTIFF files are opened with :mod:`tifffile` first.  Native runs normally
+prefer a read-only memory map.  A configurable bounded-region backend can
+instead seek to uncompressed rows or decode only intersecting strips/tiles;
+this is suitable for virtual filesystems where true memory mapping is absent.
+Large images can remain preview-only and be normalized one overlapping tile at
+a time using a single set of preview-derived percentile limits.
 """
 
 from __future__ import annotations
@@ -17,7 +17,7 @@ import math
 import os
 from collections.abc import Iterator, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 import cv2
 import numpy as np
@@ -59,6 +59,8 @@ class ImageMetadata:
     normalization_high_value: float
     analysis_dtype: str = "float32"
     analysis_quantized_to_uint8: bool = False
+    source_region_read_bounded: bool = False
+    decoded_full_source_resident: bool = False
     low_clipped_fraction: float = 0.0
     high_clipped_fraction: float = 0.0
     clipping_fraction_estimated: bool = True
@@ -305,6 +307,298 @@ def make_preview(image: np.ndarray, max_size: int = 2000) -> tuple[np.ndarray, f
     return preview, scale_x, scale_y
 
 
+class _BoundedTiffRegionReader:
+    """Read scalar 2-D TIFF regions without materializing the full image.
+
+    Uncompressed strip-organized images are read directly from their byte
+    offsets.  Other supported layouts decode only the strips or tiles
+    intersecting a requested region.  A maximum decoded-segment size prevents
+    a compressed single-strip image from silently becoming a full-frame decode.
+    """
+
+    def __init__(self, path: Path, *, max_decoded_segment_bytes: int) -> None:
+        self.path = path
+        self.max_decoded_segment_bytes = int(max_decoded_segment_bytes)
+        if self.max_decoded_segment_bytes <= 0:
+            raise ValueError("max_decoded_segment_bytes must be positive")
+        self._tif: tifffile.TiffFile | None = None
+        self._file: BinaryIO | None = None
+        try:
+            self._tif = tifffile.TiffFile(path)
+            if not self._tif.series:
+                raise ImageReadError("TIFF has no image series")
+            series = self._tif.series[0]
+            shape = tuple(int(value) for value in series.shape)
+            if len(shape) != 2 or len(series.pages) != 1:
+                raise ImageReadError(
+                    "Bounded TIFF regions require one scalar 2-D page; "
+                    f"the first series has shape {shape} and {len(series.pages)} page(s)"
+                )
+            self.page = series.pages[0]
+            self.height, self.width = shape
+            self.dtype = np.dtype(series.dtype)
+            samples = int(getattr(self.page, "samplesperpixel", 1) or 1)
+            if samples != 1:
+                raise ImageReadError(
+                    "Bounded TIFF regions currently require one grayscale sample per pixel; "
+                    f"found {samples}"
+                )
+            offsets = tuple(int(value) for value in self.page.dataoffsets)
+            bytecounts = tuple(int(value) for value in self.page.databytecounts)
+            if not offsets or len(offsets) != len(bytecounts):
+                raise ImageReadError("TIFF strip/tile offset table is missing or inconsistent")
+            self._offsets = offsets
+            self._bytecounts = bytecounts
+            self._file = path.open("rb", buffering=0)
+
+            compression = getattr(self.page.compression, "name", str(self.page.compression))
+            predictor_value = getattr(self.page, "predictor", 1)
+            predictor = int(getattr(predictor_value, "value", predictor_value) or 1)
+            bits_value = getattr(self.page, "bitspersample", self.dtype.itemsize * 8)
+            if isinstance(bits_value, tuple):
+                bits = int(bits_value[0]) if len(set(bits_value)) == 1 else -1
+            else:
+                bits = int(bits_value)
+            self._direct_uncompressed_strips = bool(
+                not self.page.is_tiled
+                and str(compression).upper() in {"NONE", "1"}
+                and predictor == 1
+                and bits == self.dtype.itemsize * 8
+            )
+            self._disk_dtype = np.dtype(
+                self._tif.byteorder + self.dtype.str[1:]
+                if self.dtype.itemsize > 1
+                else self.dtype
+            )
+            self._rows_per_strip = int(getattr(self.page, "rowsperstrip", 0) or 0)
+            self._tile_width = int(getattr(self.page, "tilewidth", 0) or 0)
+            self._tile_height = int(getattr(self.page, "tilelength", 0) or 0)
+
+            self._decoder: Any | None = None
+            if not self._direct_uncompressed_strips:
+                segment_width = self._tile_width if self.page.is_tiled else self.width
+                segment_height = (
+                    self._tile_height if self.page.is_tiled else self._rows_per_strip
+                )
+                if segment_width <= 0 or segment_height <= 0:
+                    raise ImageReadError("TIFF strip/tile dimensions are invalid")
+                decoded_bytes = segment_width * segment_height * self.dtype.itemsize
+                if decoded_bytes > self.max_decoded_segment_bytes:
+                    raise ImageReadError(
+                        "A TIFF strip/tile would decode to "
+                        f"{decoded_bytes:,} bytes, exceeding the configured bounded-region "
+                        f"limit of {self.max_decoded_segment_bytes:,} bytes. This layout "
+                        "cannot be analyzed without a full or oversized segment decode."
+                    )
+                try:
+                    self._decoder = self.page.decode
+                except Exception as exc:
+                    raise ImageReadError(
+                        f"TIFF compression {compression} is unavailable for bounded decoding: {exc}"
+                    ) from exc
+            self.mode = (
+                "direct-uncompressed-strips"
+                if self._direct_uncompressed_strips
+                else "intersecting-strip-tile-decode"
+            )
+        except Exception:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        if self._file is not None:
+            self._file.close()
+            self._file = None
+        if self._tif is not None:
+            self._tif.close()
+            self._tif = None
+
+    def _read_exact(self, offset: int, count: int) -> bytes:
+        if self._file is None:
+            raise ImageReadError("Bounded TIFF source is closed")
+        self._file.seek(int(offset))
+        data = self._file.read(int(count))
+        if len(data) != int(count):
+            raise ImageReadError(
+                f"TIFF data ended early at offset {offset}: expected {count}, got {len(data)} bytes"
+            )
+        return data
+
+    def _read_direct_strips(
+        self, x: int, y: int, width: int, height: int
+    ) -> np.ndarray:
+        if self._rows_per_strip <= 0:
+            raise ImageReadError("TIFF rows-per-strip is invalid")
+        output = np.empty((height, width), dtype=self.dtype)
+        bytes_per_pixel = self._disk_dtype.itemsize
+        source_row_bytes = self.width * bytes_per_pixel
+        destination_y = 0
+        source_y = y
+        remaining = height
+        while remaining:
+            strip_index = source_y // self._rows_per_strip
+            strip_y = strip_index * self._rows_per_strip
+            rows_in_strip = min(self._rows_per_strip, self.height - strip_y)
+            available = min(remaining, rows_in_strip - (source_y - strip_y))
+            # Keep each temporary byte range bounded even for very wide images.
+            max_rows = max(
+                1,
+                1
+                + max(
+                    0,
+                    self.max_decoded_segment_bytes - width * bytes_per_pixel,
+                )
+                // max(1, source_row_bytes),
+            )
+            rows = min(available, max_rows)
+            local_row = source_y - strip_y
+            offset = (
+                self._offsets[strip_index]
+                + local_row * source_row_bytes
+                + x * bytes_per_pixel
+            )
+            span = (rows - 1) * source_row_bytes + width * bytes_per_pixel
+            raw = self._read_exact(offset, span)
+            view = np.ndarray(
+                (rows, width),
+                dtype=self._disk_dtype,
+                buffer=raw,
+                strides=(source_row_bytes, bytes_per_pixel),
+            )
+            output[destination_y : destination_y + rows] = view
+            source_y += rows
+            destination_y += rows
+            remaining -= rows
+        return output
+
+    def _decode_segment(
+        self, index: int
+    ) -> tuple[np.ndarray | None, tuple[int, int, int, int, int]]:
+        if self._decoder is None:
+            raise ImageReadError("TIFF segment decoder is unavailable")
+        count = self._bytecounts[index]
+        encoded = None if count == 0 else self._read_exact(self._offsets[index], count)
+        try:
+            decoded, position, _ = self._decoder(
+                encoded,
+                index,
+                jpegtables=getattr(self.page, "jpegtables", None),
+            )
+        except Exception as exc:
+            compression = getattr(self.page.compression, "name", str(self.page.compression))
+            raise ImageReadError(
+                f"Could not decode TIFF {compression} segment {index}: {exc}"
+            ) from exc
+        if decoded is None:
+            return None, position
+        array = np.asarray(decoded)
+        if array.ndim != 4 or array.shape[0] != 1 or array.shape[-1] != 1:
+            raise ImageReadError(
+                f"Decoded TIFF segment {index} has unsupported shape {array.shape}"
+            )
+        return np.asarray(array[0, :, :, 0]), position
+
+    def _segment_geometry(self) -> tuple[int, int, int]:
+        segment_width = self._tile_width if self.page.is_tiled else self.width
+        segment_height = self._tile_height if self.page.is_tiled else self._rows_per_strip
+        across = int(math.ceil(self.width / segment_width))
+        return segment_width, segment_height, across
+
+    def _read_decoded_segments(
+        self, x: int, y: int, width: int, height: int
+    ) -> np.ndarray:
+        output = np.zeros((height, width), dtype=self.dtype)
+        segment_width, segment_height, across = self._segment_geometry()
+        first_column = x // segment_width
+        last_column = (x + width - 1) // segment_width
+        first_row = y // segment_height
+        last_row = (y + height - 1) // segment_height
+        for segment_row in range(first_row, last_row + 1):
+            for segment_column in range(first_column, last_column + 1):
+                index = segment_row * across + segment_column
+                if index >= len(self._offsets):
+                    raise ImageReadError(
+                        f"TIFF segment index {index} exceeds offset table length {len(self._offsets)}"
+                    )
+                decoded, position = self._decode_segment(index)
+                if decoded is None:
+                    continue
+                source_y, source_x = int(position[2]), int(position[3])
+                iy0, ix0 = max(y, source_y), max(x, source_x)
+                iy1 = min(y + height, source_y + decoded.shape[0], self.height)
+                ix1 = min(x + width, source_x + decoded.shape[1], self.width)
+                if iy0 >= iy1 or ix0 >= ix1:
+                    continue
+                output[iy0 - y : iy1 - y, ix0 - x : ix1 - x] = decoded[
+                    iy0 - source_y : iy1 - source_y,
+                    ix0 - source_x : ix1 - source_x,
+                ]
+        return output
+
+    def read_region(self, x: int, y: int, width: int, height: int) -> np.ndarray:
+        x0, y0, region_width, region_height = map(int, (x, y, width, height))
+        if region_width <= 0 or region_height <= 0:
+            raise ValueError("Region width and height must be positive")
+        if (
+            x0 < 0
+            or y0 < 0
+            or x0 + region_width > self.width
+            or y0 + region_height > self.height
+        ):
+            raise ValueError(
+                f"Region {(x0, y0, region_width, region_height)} is outside image "
+                f"bounds {(self.width, self.height)}"
+            )
+        if self._direct_uncompressed_strips:
+            return self._read_direct_strips(x0, y0, region_width, region_height)
+        return self._read_decoded_segments(x0, y0, region_width, region_height)
+
+    def read_decimated(self, step: int) -> np.ndarray:
+        """Return ``image[::step, ::step]`` with bounded transient storage."""
+
+        stride = max(1, int(step))
+        target_height = int(math.ceil(self.height / stride))
+        target_width = int(math.ceil(self.width / stride))
+        output = np.zeros((target_height, target_width), dtype=self.dtype)
+        if self._direct_uncompressed_strips:
+            source_row_bytes = self.width * max(1, self.dtype.itemsize)
+            source_rows_per_band = max(
+                1, self.max_decoded_segment_bytes // max(1, source_row_bytes)
+            )
+            target_rows_per_band = max(
+                1, 1 + (source_rows_per_band - 1) // stride
+            )
+            for target_y0 in range(0, target_height, target_rows_per_band):
+                target_y1 = min(target_height, target_y0 + target_rows_per_band)
+                source_y0 = target_y0 * stride
+                source_y1 = min(self.height, (target_y1 - 1) * stride + 1)
+                band = self.read_region(
+                    0, source_y0, self.width, source_y1 - source_y0
+                )
+                output[target_y0:target_y1] = band[::stride, ::stride]
+            return output
+
+        for index in range(len(self._offsets)):
+            decoded, position = self._decode_segment(index)
+            if decoded is None:
+                continue
+            source_y, source_x = int(position[2]), int(position[3])
+            y1 = min(source_y + decoded.shape[0], self.height)
+            x1 = min(source_x + decoded.shape[1], self.width)
+            first_y = int(math.ceil(source_y / stride) * stride)
+            first_x = int(math.ceil(source_x / stride) * stride)
+            if first_y >= y1 or first_x >= x1:
+                continue
+            output[
+                slice(first_y // stride, int(math.ceil(y1 / stride))),
+                slice(first_x // stride, int(math.ceil(x1 / stride))),
+            ] = decoded[
+                slice(first_y - source_y, y1 - source_y, stride),
+                slice(first_x - source_x, x1 - source_x, stride),
+            ]
+        return output
+
+
 class ImageSource:
     """Random-access source with global percentile normalization.
 
@@ -332,6 +626,11 @@ class ImageSource:
         normalization_sample_max_size: int = 2000,
         respect_tiff_photometric: bool = True,
         prefer_pyvips: bool = True,
+        prefer_bounded_tiff_regions: bool = False,
+        allow_tiff_memmap: bool = True,
+        allow_tiff_full_decode: bool = True,
+        tiff_max_decoded_segment_bytes: int = 64 * 1024 * 1024,
+        tiff_row_band_cache_bytes: int = 64 * 1024 * 1024,
     ) -> None:
         self.path = Path(path).expanduser().resolve()
         if not self.path.is_file():
@@ -344,8 +643,19 @@ class ImageSource:
         self.sample_max_size = int(normalization_sample_max_size)
         self.respect_tiff_photometric = bool(respect_tiff_photometric)
         self.prefer_pyvips = bool(prefer_pyvips)
+        self.prefer_bounded_tiff_regions = bool(prefer_bounded_tiff_regions)
+        self.allow_tiff_memmap = bool(allow_tiff_memmap)
+        self.allow_tiff_full_decode = bool(allow_tiff_full_decode)
+        self.tiff_max_decoded_segment_bytes = int(tiff_max_decoded_segment_bytes)
+        self.tiff_row_band_cache_bytes = int(tiff_row_band_cache_bytes)
+        if self.tiff_max_decoded_segment_bytes <= 0:
+            raise ValueError("tiff_max_decoded_segment_bytes must be positive")
+        if self.tiff_row_band_cache_bytes <= 0:
+            raise ValueError("tiff_row_band_cache_bytes must be positive")
         self._array: np.ndarray | None = None
         self._vips_image: Any | None = None
+        self._bounded_tiff: _BoundedTiffRegionReader | None = None
+        self._bounded_sample_cache: np.ndarray | None = None
         self._color_order = "RGB"
         self._warnings: list[str] = []
         self._limitations: list[str] = []
@@ -355,6 +665,8 @@ class ImageSource:
         self._photometric: str | None = None
         self._white_is_zero = False
         self._random_access = False
+        self._source_region_read_bounded = False
+        self._decoded_full_source_resident = False
         self._source_shape: tuple[int, ...] = ()
         self._dtype = np.dtype("uint8")
         self._channels = 1
@@ -420,6 +732,8 @@ class ImageSource:
             normalization_high_value=self._normalization_high_value,
             analysis_dtype="float32",
             analysis_quantized_to_uint8=False,
+            source_region_read_bounded=self._source_region_read_bounded,
+            decoded_full_source_resident=self._decoded_full_source_resident,
             low_clipped_fraction=float(np.mean(finite <= low_float)),
             high_clipped_fraction=float(np.mean(finite >= high_float)),
             clipping_fraction_estimated=True,
@@ -485,14 +799,35 @@ class ImageSource:
         except (OSError, ValueError, tifffile.TiffFileError) as exc:
             raise ImageReadError(f"Could not inspect TIFF {self.path}: {exc}") from exc
 
-        try:
-            # Explicit read-only mode is essential for read-only source directories.
-            mapped = tifffile.memmap(self.path, mode="r", series=0)
-            self._set_numpy_backend(mapped, loader="tifffile.memmap(read-only)")
-            self._random_access = True
-            return
-        except (OSError, ValueError, TypeError, tifffile.TiffFileError) as exc:
-            self._warnings.append(f"TIFF memory mapping unavailable: {exc}")
+        bounded_error: Exception | None = None
+        if self.prefer_bounded_tiff_regions:
+            try:
+                self._set_bounded_tiff_backend()
+                return
+            except (ImageReadError, OSError, ValueError, tifffile.TiffFileError) as exc:
+                bounded_error = exc
+                self._warnings.append(f"Bounded TIFF region backend unavailable: {exc}")
+
+        if self.allow_tiff_memmap:
+            try:
+                # Explicit read-only mode is essential for read-only source directories.
+                mapped = tifffile.memmap(self.path, mode="r", series=0)
+                self._set_numpy_backend(mapped, loader="tifffile.memmap(read-only)")
+                self._random_access = True
+                self._decoded_full_source_resident = False
+                return
+            except (OSError, ValueError, TypeError, tifffile.TiffFileError) as exc:
+                self._warnings.append(f"TIFF memory mapping unavailable: {exc}")
+        else:
+            self._limitations.append("TIFF memory mapping was disabled by configuration")
+
+        if not self.prefer_bounded_tiff_regions:
+            try:
+                self._set_bounded_tiff_backend()
+                return
+            except (ImageReadError, OSError, ValueError, tifffile.TiffFileError) as exc:
+                bounded_error = exc
+                self._warnings.append(f"Bounded TIFF region backend unavailable: {exc}")
 
         if self.prefer_pyvips and self._try_open_pyvips():
             self._random_access = True
@@ -501,14 +836,44 @@ class ImageSource:
             )
             return
 
+        if not self.allow_tiff_full_decode:
+            detail = f": {bounded_error}" if bounded_error is not None else ""
+            raise ImageReadError(
+                "No bounded TIFF reader is available and full-image TIFF decoding is "
+                f"disabled by configuration{detail}"
+            )
+
         try:
             decoded = tifffile.imread(self.path, series=0)
         except (OSError, ValueError, tifffile.TiffFileError) as exc:
             raise ImageReadError(f"Could not decode TIFF {self.path}: {exc}") from exc
         self._set_numpy_backend(decoded, loader="tifffile.asarray(full fallback)")
         self._random_access = True
+        self._decoded_full_source_resident = True
         self._limitations.append(
             "TIFF was not memory-mappable and pyvips was unavailable; the full decoded array is resident in memory"
+        )
+
+    def _set_bounded_tiff_backend(self) -> None:
+        backend = _BoundedTiffRegionReader(
+            self.path,
+            max_decoded_segment_bytes=self.tiff_max_decoded_segment_bytes,
+        )
+        self._bounded_tiff = backend
+        self._array = None
+        self._vips_image = None
+        self._height, self._width = backend.height, backend.width
+        self._channels = 1
+        self._dtype = backend.dtype
+        self._source_shape = (backend.height, backend.width)
+        self._loader = f"tifffile.bounded-regions({backend.mode})"
+        self._color_order = "RGB"
+        self._random_access = True
+        self._source_region_read_bounded = True
+        self._decoded_full_source_resident = False
+        self._limitations.append(
+            "TIFF source pixels are seek-read by bounded rows or intersecting strips/tiles; "
+            "the source is not materialized as a full decoded array"
         )
 
     def _try_open_pyvips(self) -> bool:
@@ -537,6 +902,7 @@ class ImageSource:
         )
         self._loader = "pyvips(random access)"
         self._color_order = "RGB"
+        self._decoded_full_source_resident = False
         return True
 
     def _open_raster(self) -> None:
@@ -545,6 +911,7 @@ class ImageSource:
             self._color_order = "BGR"
             self._set_numpy_backend(image, loader="opencv")
             self._random_access = True
+            self._decoded_full_source_resident = True
             self._limitations.append(
                 "PNG/JPEG/BMP input is fully decoded in memory; tile iteration limits processing copies but not source residency"
             )
@@ -557,6 +924,7 @@ class ImageSource:
             self._color_order = "RGB"
             self._set_numpy_backend(image, loader="Pillow fallback")
             self._random_access = True
+            self._decoded_full_source_resident = True
             self._limitations.append(
                 "This raster input is fully decoded in memory; tile iteration limits processing copies but not source residency"
             )
@@ -619,6 +987,22 @@ class ImageSource:
                 )
                 gray = cv2.resize(gray, target, interpolation=cv2.INTER_AREA)
             return np.asarray(gray)
+        if self._bounded_tiff is not None:
+            if (
+                self._bounded_sample_cache is not None
+                and max(self._bounded_sample_cache.shape) <= max_size
+            ):
+                return self._bounded_sample_cache
+            step = max(1, int(math.floor(1.0 / max(factor, np.finfo(float).eps))))
+            gray = self._bounded_tiff.read_decimated(step)
+            if max(gray.shape) > max_size:
+                target_factor = max_size / max(gray.shape)
+                target = (
+                    max(1, int(round(gray.shape[1] * target_factor))),
+                    max(1, int(round(gray.shape[0] * target_factor))),
+                )
+                gray = cv2.resize(gray, target, interpolation=cv2.INTER_AREA)
+            return np.asarray(gray)
         if self._vips_image is None:
             raise ImageReadError("Image source is closed")
         image = self._vips_image
@@ -640,6 +1024,11 @@ class ImageSource:
             if not gray.dtype.isnative:
                 gray = gray.astype(gray.dtype.newbyteorder("="), copy=True)
             return np.asarray(gray)
+        if self._bounded_tiff is not None:
+            step = max(1, int(math.ceil(max(self._height, self._width) / max_size)))
+            sample = self._bounded_tiff.read_decimated(step)
+            self._bounded_sample_cache = sample
+            return sample
         # pyvips has no cheap strided view; its shrink operation is still the
         # bounded-memory choice, and the sampled-extrema flag records this path.
         return self._raw_preview(max_size)
@@ -677,6 +1066,10 @@ class ImageSource:
         if self._array is not None:
             region = self._array[y0 : y0 + region_height, x0 : x0 + region_width, ...]
             return _grayscale(region, color_order=self._color_order)
+        if self._bounded_tiff is not None:
+            return self._bounded_tiff.read_region(
+                x0, y0, region_width, region_height
+            )
         if self._vips_image is not None:
             crop = self._vips_image.crop(x0, y0, region_width, region_height)
             return _grayscale(self._vips_to_numpy(crop), color_order="RGB")
@@ -737,15 +1130,41 @@ class ImageSource:
             )
         for core_y in range(0, self._height, size):
             core_height = min(size, self._height - core_y)
+            band_y0 = max(0, core_y - halo)
+            band_y1 = min(self._height, core_y + core_height + halo)
+            band: np.ndarray | None = None
+            band_bytes = (
+                self._width * (band_y1 - band_y0) * max(1, self._dtype.itemsize)
+            )
+            if (
+                self._bounded_tiff is not None
+                and band_bytes <= self.tiff_row_band_cache_bytes
+            ):
+                band = self.read_region_raw(
+                    0, band_y0, self._width, band_y1 - band_y0
+                )
             for core_x in range(0, self._width, size):
                 core_width = min(size, self._width - core_x)
                 x0 = max(0, core_x - halo)
-                y0 = max(0, core_y - halo)
+                y0 = band_y0
                 x1 = min(self._width, core_x + core_width + halo)
-                y1 = min(self._height, core_y + core_height + halo)
-                tile = self.read_region(
-                    x0, y0, x1 - x0, y1 - y0, normalize=normalize
-                )
+                y1 = band_y1
+                if band is None:
+                    tile = self.read_region(
+                        x0, y0, x1 - x0, y1 - y0, normalize=normalize
+                    )
+                else:
+                    raw_tile = band[:, x0:x1]
+                    tile = (
+                        normalize_to_float32(
+                            raw_tile,
+                            self._normalization_low_value,
+                            self._normalization_high_value,
+                            white_is_zero=self._white_is_zero,
+                        )
+                        if normalize
+                        else raw_tile
+                    )
                 yield ImageTile(
                     image=tile,
                     x=x0,
@@ -762,6 +1181,10 @@ class ImageSource:
         """Release decoder references."""
 
         self._vips_image = None
+        if self._bounded_tiff is not None:
+            self._bounded_tiff.close()
+            self._bounded_tiff = None
+        self._bounded_sample_cache = None
         # Do not explicitly close numpy.memmap's private mmap while exported
         # views may exist.  Dropping our reference is safe and deterministic.
         self._array = None
@@ -825,6 +1248,17 @@ def load_image(
         if large_image_threshold_pixels is not None
         else options.get("large_image_threshold_pixels", 25_000_000)
     )
+    prefer_bounded_regions = bool(
+        options.get("prefer_bounded_tiff_regions", False)
+    )
+    allow_memmap = bool(options.get("allow_tiff_memmap", True))
+    allow_full_decode = bool(options.get("allow_tiff_full_decode", True))
+    max_decoded_segment_bytes = int(
+        options.get("tiff_max_decoded_segment_bytes", 64 * 1024 * 1024)
+    )
+    row_band_cache_bytes = int(
+        options.get("tiff_row_band_cache_bytes", 64 * 1024 * 1024)
+    )
     if threshold <= 0:
         raise ValueError(
             f"large_image_threshold_pixels must be positive, got {threshold}"
@@ -836,6 +1270,11 @@ def load_image(
         normalization_sample_max_size=max_size,
         respect_tiff_photometric=respect,
         prefer_pyvips=prefer_pyvips,
+        prefer_bounded_tiff_regions=prefer_bounded_regions,
+        allow_tiff_memmap=allow_memmap,
+        allow_tiff_full_decode=allow_full_decode,
+        tiff_max_decoded_segment_bytes=max_decoded_segment_bytes,
+        tiff_row_band_cache_bytes=row_band_cache_bytes,
     )
     try:
         preview = source.get_preview(max_size)

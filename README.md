@@ -6,7 +6,7 @@
 
 ## 在线静态展示
 
-项目的公开展示页位于 <https://sma084545-pixel.github.io/sic-wafer-point-counter/>。该页面只展示方法、科学边界和经过真实管线生成的合成示例；它不会在浏览器中运行 Python，也不接收或处理科研原图。完整图像分析请克隆本仓库后在本机运行。
+项目的公开展示页位于 <https://sma084545-pixel.github.io/sic-wafer-point-counter/>，其中[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)会在独立 Web Worker 内运行打包后的同一套 Python 管线。输入 `File` 只读挂载在当前标签页，不上传到网站服务器；页面按格式和内存风险分层放行，兼容布局的 TIFF/BigTIFF 可选择至 100 MiB 并按原始分辨率重叠分块分析。超过网页安全清单、编码不支持、需要完整候选裁剪或需长期留存结果时，应使用本机工作台。
 
 ## 程序做什么
 
@@ -136,9 +136,19 @@ python -m sic_wafer_counter.cli analyze --help
 
 ## 本机展示与分析平台
 
-公开 GitHub Pages 另提供受内存上限保护的[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)：图像字节只写入当前标签页的 Pyodide 文件系统，不上传到服务器；分析在 Web Worker 中调用项目打包的同一个 `sic_wafer_counter.pipeline.analyze_image`，不是 JavaScript 仿制算法。它会生成核心指标、全部候选 CSV、论文语义一致的自动 XRT 候选红框图、明确标为非 DIC/KOH 验证的局部复核图、按真实有效面积归一化的整片密度热图及逐格 CSV、HTML 报告和完整 ZIP。
+公开 GitHub Pages 另提供受内存上限保护的[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)：输入 `File` 由 WORKERFS 只读挂载到 Pyodide Worker，不在页面主线程整体读取，也不上传到服务器；分析调用项目打包的同一个 `sic_wafer_counter.pipeline.analyze_image`，不是 JavaScript 仿制算法。它会生成核心指标、全部候选 CSV、论文语义一致的自动 XRT 候选红框图、明确标为非 DIC/KOH 验证的局部复核图、按真实有效面积归一化的整片密度热图及逐格 CSV、HTML 报告和完整 ZIP。
 
-浏览器模式固定限制为 24 MiB、600 万像素、单边 6000 px，且为控制内存不输出每个候选的独立原始位深裁剪。Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入图像不会发送到该 CDN。超大 TIFF/BigTIFF、完整候选裁剪、无网环境或需要长期保留结果时，请使用下面的本机工作台。关闭或刷新浏览器标签页前应先下载 ZIP，因为浏览器临时文件不会持久保存。
+网页限制是分层的，而不是只看压缩文件大小：
+
+- 所有格式的选择上限为 100 MiB；
+- PNG/JPG/BMP 仍走整图解码，限制为 24 MiB、600 万像素、单边 6000 px；
+- TIFF/BigTIFF 在二维单通道、axes/尺寸合法且有界随机访问后端可用时，可到 100 MiB、1.2 亿像素、单边 16000 px，并固定使用 1024 px tile 与 128 px halo；
+- TIFF 分段解码可能超过安全上限、存在未支持的多页/多通道维度，或运行时无法确认有界读取时，网页会停止且不显示 `rho`，不会退回整图解码或缩图检测；
+- 为避免结果尾声重复占用内存，较大的候选 CSV 只放入完整 ZIP，不再同时复制为网页单项文件；浏览器模式也不输出每个候选的独立原始位深裁剪。
+
+版本 0.2.1 的发布验收使用 Chrome 151 实际选择并完成了一张 93.5 MiB、7000×7000、uint16、二维单通道未压缩 TIFF：网页与本机均识别 96 个合成真值点，得到相同的 `S=78.539295 cm²` 和 `rho=1.222318 cm^-2`；网页摘要确认 `WORKERFS_read_only_File`、有界区域读取、45 个 1024 px tile、float32 科研通道、`analysis_downsample_factor=1`，完整 ZIP 通过完整性检查。该验收只证明这种文件布局和浏览器路径可运行，不代表所有约 100 MiB 的 TIFF 编码都受支持，也不构成真实 SiC 识别准确率。
+
+Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入图像不会发送到该 CDN。完整候选裁剪、无网环境、网页拒绝的 TIFF 编码或需要长期保留结果时，请使用下面的本机工作台。关闭或刷新浏览器标签页前应先下载 ZIP，因为浏览器临时文件不会持久保存。
 
 安装依赖后，启动本机页面：
 
@@ -406,11 +416,12 @@ pytest -q
 不同格式的实际内存行为并不相同：
 
 - 未压缩、可内存映射的 TIFF/BigTIFF：tifffile 可按需访问，适合真正 tile 读取；
+- 内置有界 TIFF 后端：可按偏移读取未压缩行/条带，并只解码与目标区域相交且低于安全上限的条带或 tile；网页模式强制使用该后端并禁用整图回退；
 - pyvips 可用且格式支持随机访问：使用 pyvips 区域读取；
-- 某些压缩 TIFF：没有 pyvips 时，tifffile 可能必须先解码完整数组；
+- 某些压缩 TIFF：原生默认配置仍可能在没有其他后端时完整解码；网页配置不会这样做，压缩单条带或缺少解码器时会明确拒绝；
 - PNG/JPG/BMP：OpenCV/Pillow 通常需要解码整张图，虽然之后的检测可以 tile 化，但这不等于文件本身被真正随机分块读取。
 
-程序会在 `summary.json`/`run.log` 中明确写出 loader、`lazy`/`random_access` 状态和限制。分块能降低检测中间数组峰值，但当前传统形态学背景核在 tile 接缝、极大伪影跨 tile、以及全局坏区标注方面仍需谨慎验证。tile overlap 应至少覆盖最大目标半径、形态学核影响范围和分水岭上下文；修改 `background_kernel_px` 后也要相应检查 overlap。
+程序会在 `summary.json`/`run.log` 中明确写出 loader、`lazy`/`random_access`、`source_region_read_bounded`、`decoded_full_source_resident` 状态和限制。浏览器报告还记录输入传输方式、源/分析分辨率、`analysis_downsample_factor=1` 和是否发生科研降采样。分块能降低检测中间数组峰值，但当前传统形态学背景核在 tile 接缝、极大伪影跨 tile、以及全局坏区标注方面仍需谨慎验证。tile overlap 应至少覆盖最大目标半径、形态学核影响范围和分水岭上下文；修改 `background_kernel_px` 后也要相应检查 overlap。
 
 ## 统计不确定度怎么读
 

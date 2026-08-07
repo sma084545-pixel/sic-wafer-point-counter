@@ -17,6 +17,8 @@ from typing import Any
 import cv2
 import numpy as np
 from scipy.optimize import least_squares
+from scipy.spatial import cKDTree
+from skimage.measure import points_in_poly
 
 
 LOGGER = logging.getLogger(__name__)
@@ -161,6 +163,51 @@ class AnalysisMaskTile:
     @property
     def height(self) -> int:
         return int(self.masks.valid_analysis_mask.shape[0])
+
+
+class ValidBoundaryIndex:
+    """Bounded-memory nearest-neighbour index of the final invalid boundary.
+
+    Points are centres of invalid pixels adjacent to the final valid mask,
+    including the one-pixel exterior ring around the source image.  For any
+    valid candidate pixel, its nearest zero in the exact raster mask is
+    necessarily one of these boundary points.  A KD-tree therefore reproduces
+    the Euclidean distance-transform value without allocating a full-frame
+    float32 distance raster.
+    """
+
+    def __init__(
+        self,
+        points_xy: np.ndarray,
+        *,
+        max_mask_tile_pixels: int,
+        scan_tile_size: int,
+    ) -> None:
+        points = np.asarray(points_xy)
+        if points.ndim != 2 or points.shape[1] != 2 or not len(points):
+            raise ValueError("Valid-boundary index requires at least one (x, y) point")
+        self._tree = cKDTree(np.asarray(points, dtype=np.float64))
+        self.boundary_point_count = int(len(points))
+        self.max_mask_tile_pixels = int(max_mask_tile_pixels)
+        self.scan_tile_size = int(scan_tile_size)
+
+    @property
+    def tree_data_bytes(self) -> int:
+        """Bytes in the KD-tree's coordinate table (excluding tree overhead)."""
+
+        return int(self._tree.data.nbytes)
+
+    def query_yx(self, coordinates_yx: np.ndarray) -> np.ndarray:
+        """Return exact nearest final-invalid-pixel distances for global pixels."""
+
+        coordinates = np.asarray(coordinates_yx)
+        if coordinates.ndim != 2 or coordinates.shape[1] != 2:
+            raise ValueError("coordinates_yx must have shape (n, 2)")
+        if not len(coordinates):
+            return np.empty(0, dtype=np.float32)
+        query_xy = np.column_stack((coordinates[:, 1], coordinates[:, 0]))
+        distances, _ = self._tree.query(query_xy, k=1, eps=0.0)
+        return np.asarray(distances, dtype=np.float32)
 
 
 @dataclasses.dataclass(frozen=True, slots=True)
@@ -821,6 +868,413 @@ def _build_analysis_masks_tile(
     return AnalysisMasks(full, edge, invalid, valid)
 
 
+def build_valid_boundary_index(
+    geometry: WaferGeometry,
+    *,
+    tile_size: int = 2048,
+    exclude_edge_mm: float = 0.0,
+    invalid_regions: Sequence[Any] | None = None,
+    invalid_rectangles: Sequence[Any] | None = None,
+    invalid_polygons: Sequence[Sequence[Sequence[float]]] | None = None,
+    invalid_mask: np.ndarray | None = None,
+    use_contour: bool = True,
+    max_boundary_points: int = 2_000_000,
+    max_region_raster_pixels: int = 8_000_000,
+) -> ValidBoundaryIndex:
+    """Index the exact final-mask boundary using bounded raster-mask tiles.
+
+    The full wafer mask, edge exclusion, analytic invalid regions, and an
+    optional supplied raster invalid mask are combined by the same functions
+    used for area calculation.  Only invalid pixels touching a valid pixel are
+    retained.  This is sufficient for exact Euclidean nearest-zero queries and
+    bounds temporary raster memory by ``tile_size`` plus a one-pixel boundary
+    halo and the configured edge-exclusion halo.
+
+    A pathological raster invalid mask can have a boundary proportional to the
+    complete image area.  ``max_boundary_points`` is an explicit safety limit:
+    exceeding it aborts the analysis instead of silently approximating the
+    boundary or allocating an unbounded KD-tree.  Analytic invalid polygons
+    are rendered once in their translation-invariant bounding box so their
+    OpenCV raster boundary exactly matches full-mask rendering; an independently
+    bounded ``max_region_raster_pixels`` controls pathological polygons.
+    """
+
+    size = int(tile_size)
+    point_limit = int(max_boundary_points)
+    region_raster_limit = int(max_region_raster_pixels)
+    if size <= 0:
+        raise ValueError("tile_size must be positive")
+    if point_limit <= 0:
+        raise ValueError("max_boundary_points must be positive")
+    if region_raster_limit <= 0:
+        raise ValueError("max_region_raster_pixels must be positive")
+    edge_width_px = float(exclude_edge_mm) / geometry.mm_per_pixel
+    if edge_width_px < 0.0 or not math.isfinite(edge_width_px):
+        raise ValueError("exclude_edge_mm must be finite and non-negative")
+    edge_halo = int(math.ceil(edge_width_px)) + 2 if edge_width_px > 0.0 else 0
+
+    chunks: list[np.ndarray] = []
+    point_count = 0
+    max_mask_tile_pixels = 0
+    adjacency_kernel = np.ones((3, 3), dtype=np.uint8)
+
+    def append_points(points_xy: np.ndarray) -> None:
+        nonlocal point_count
+        if not len(points_xy):
+            return
+        point_count += int(len(points_xy))
+        if point_count > point_limit:
+            raise RuntimeError(
+                "Final valid-mask boundary is too complex for the bounded-memory "
+                f"index ({point_count:,} points exceeds {point_limit:,}). "
+                "Density was not calculated; simplify the supplied raster invalid mask "
+                "or analyse it with a larger explicitly reviewed boundary budget."
+            )
+        chunks.append(np.asarray(points_xy, dtype=np.int32))
+
+    # The padded full-mask distance transform treats the image exterior as
+    # invalid.  Represent that same one-pixel exterior ring without allocating
+    # a padded full-frame raster.
+    append_points(
+        np.column_stack(
+            (
+                np.concatenate(
+                    (
+                        np.arange(geometry.image_width, dtype=np.int32),
+                        np.arange(geometry.image_width, dtype=np.int32),
+                        np.full(geometry.image_height, -1, dtype=np.int32),
+                        np.full(geometry.image_height, geometry.image_width, dtype=np.int32),
+                    )
+                ),
+                np.concatenate(
+                    (
+                        np.full(geometry.image_width, -1, dtype=np.int32),
+                        np.full(geometry.image_width, geometry.image_height, dtype=np.int32),
+                        np.arange(geometry.image_height, dtype=np.int32),
+                        np.arange(geometry.image_height, dtype=np.int32),
+                    )
+                ),
+            )
+        )
+    )
+
+    # Cache analytic invalid regions, but do not index their individual
+    # boundaries.  They must first be unioned with the wafer silhouette, edge
+    # exclusion, supplied raster mask, and one another.  Otherwise an internal
+    # edge hidden by an overlapping exclusion could be mistaken for a boundary
+    # of the *final* valid mask.
+    #
+    # Rasterizing a polygon independently inside each scan tile can change a
+    # few OpenCV edge pixels when vertices lie outside that tile.  Render its
+    # complete bounding box once, then copy intersecting slices into scan
+    # tiles.  This is translation-invariant and matches full-mask fillPoly.
+    rectangle_list, polygon_list = _split_invalid_regions(
+        invalid_regions, invalid_rectangles, invalid_polygons
+    )
+    rectangle_cache: list[tuple[int, int, int, int]] = []
+    for rectangle in rectangle_list:
+        left, top, right, bottom = _parse_rectangle(rectangle)
+        x0 = max(0, int(math.floor(left)))
+        y0 = max(0, int(math.floor(top)))
+        x1 = min(geometry.image_width, int(math.ceil(right)))
+        y1 = min(geometry.image_height, int(math.ceil(bottom)))
+        if x1 <= x0 or y1 <= y0:
+            continue
+        rectangle_cache.append((x0, y0, x1, y1))
+
+    polygon_cache: list[tuple[int, int, np.ndarray]] = []
+    cached_polygon_pixels = 0
+    for polygon_values in polygon_list:
+        polygon = np.asarray(polygon_values, dtype=np.float64)
+        if polygon.ndim != 2 or polygon.shape[0] < 3 or polygon.shape[1] != 2:
+            raise ValueError(f"Invalid polygon coordinate array: {polygon.shape}")
+        polygon = np.rint(polygon).astype(np.int32)
+        polygon_x0 = int(np.min(polygon[:, 0]))
+        polygon_y0 = int(np.min(polygon[:, 1]))
+        polygon_x1 = int(np.max(polygon[:, 0])) + 1
+        polygon_y1 = int(np.max(polygon[:, 1])) + 1
+        polygon_width = polygon_x1 - polygon_x0
+        polygon_height = polygon_y1 - polygon_y0
+        polygon_pixels = polygon_width * polygon_height
+        cached_polygon_pixels += polygon_pixels
+        if cached_polygon_pixels > region_raster_limit:
+            raise RuntimeError(
+                "Invalid polygon rasters are too large for exact bounded rendering "
+                f"({cached_polygon_pixels:,} pixels exceeds {region_raster_limit:,}). "
+                "Density was not calculated; split the invalid polygon into smaller "
+                "regions or use a reviewed raster-mask workflow."
+            )
+        local_polygon = polygon.copy()
+        local_polygon[:, 0] -= polygon_x0
+        local_polygon[:, 1] -= polygon_y0
+        filled = np.zeros((polygon_height, polygon_width), dtype=np.uint8)
+        cv2.fillPoly(filled, [local_polygon.reshape(-1, 1, 2)], 1)
+        visible_x0 = max(0, polygon_x0)
+        visible_y0 = max(0, polygon_y0)
+        visible_x1 = min(geometry.image_width, polygon_x1)
+        visible_y1 = min(geometry.image_height, polygon_y1)
+        if visible_x1 <= visible_x0 or visible_y1 <= visible_y0:
+            continue
+        local_x0 = visible_x0 - polygon_x0
+        local_y0 = visible_y0 - polygon_y0
+        visible = filled[
+            local_y0 : local_y0 + (visible_y1 - visible_y0),
+            local_x0 : local_x0 + (visible_x1 - visible_x0),
+        ].astype(bool, copy=True)
+        polygon_cache.append((visible_x0, visible_y0, visible))
+
+    contour: np.ndarray | None = None
+    contour_yx: np.ndarray | None = None
+    contour_outline = np.empty((0, 2), dtype=np.int32)
+    segment_min_x = np.empty(0, dtype=np.int32)
+    segment_max_x = np.empty(0, dtype=np.int32)
+    segment_min_y = np.empty(0, dtype=np.int32)
+    segment_max_y = np.empty(0, dtype=np.int32)
+    if use_contour and geometry.contour_polygon:
+        contour_float = np.asarray(geometry.contour_polygon, dtype=np.float64)
+        if (
+            contour_float.ndim != 2
+            or contour_float.shape[0] < 3
+            or contour_float.shape[1] != 2
+            or not np.all(np.isfinite(contour_float))
+        ):
+            raise ValueError("Wafer contour must contain finite (x, y) coordinates")
+        contour = np.rint(contour_float).astype(np.int32)
+        contour_yx = contour[:, ::-1]
+        segment_start = contour
+        segment_end = np.roll(contour, -1, axis=0)
+        segment_min_x = np.minimum(segment_start[:, 0], segment_end[:, 0])
+        segment_max_x = np.maximum(segment_start[:, 0], segment_end[:, 0])
+        segment_min_y = np.minimum(segment_start[:, 1], segment_end[:, 1])
+        segment_max_y = np.maximum(segment_start[:, 1], segment_end[:, 1])
+
+        # Full-image fillPoly can be reconstructed exactly as point-in-polygon
+        # membership plus its LINE_8 outline.  Build that outline one segment
+        # at a time; detected contours are dense, so each temporary bbox is
+        # small even when the complete wafer spans a very large image.
+        outline_chunks: list[np.ndarray] = []
+        raw_outline_points = 0
+        for start, end in zip(segment_start, segment_end, strict=True):
+            line_x0 = int(min(start[0], end[0]))
+            line_y0 = int(min(start[1], end[1]))
+            line_x1 = int(max(start[0], end[0])) + 1
+            line_y1 = int(max(start[1], end[1])) + 1
+            line_pixels = (line_x1 - line_x0) * (line_y1 - line_y0)
+            if line_pixels > region_raster_limit:
+                raise RuntimeError(
+                    "Wafer contour segment is too coarse for exact bounded rendering "
+                    f"({line_pixels:,} pixels exceeds {region_raster_limit:,}). "
+                    "Density was not calculated; provide a denser contour or manual "
+                    "circle geometry."
+                )
+            line_patch = np.zeros(
+                (line_y1 - line_y0, line_x1 - line_x0), dtype=np.uint8
+            )
+            cv2.line(
+                line_patch,
+                (int(start[0]) - line_x0, int(start[1]) - line_y0),
+                (int(end[0]) - line_x0, int(end[1]) - line_y0),
+                1,
+                thickness=1,
+                lineType=cv2.LINE_8,
+            )
+            rows, cols = np.nonzero(line_patch)
+            if not len(rows):
+                continue
+            points = np.column_stack((cols + line_x0, rows + line_y0)).astype(
+                np.int32, copy=False
+            )
+            in_image = (
+                (points[:, 0] >= 0)
+                & (points[:, 0] < geometry.image_width)
+                & (points[:, 1] >= 0)
+                & (points[:, 1] < geometry.image_height)
+            )
+            points = points[in_image]
+            raw_outline_points += int(len(points))
+            if raw_outline_points > point_limit * 2:
+                raise RuntimeError(
+                    "Wafer contour is too complex for the bounded-memory boundary "
+                    "index. Density was not calculated; simplify the contour or use "
+                    "a larger explicitly reviewed boundary budget."
+                )
+            if len(points):
+                outline_chunks.append(points)
+        if outline_chunks:
+            contour_outline = np.unique(np.concatenate(outline_chunks, axis=0), axis=0)
+
+    def exact_full_wafer_region(
+        region_x0: int,
+        region_y0: int,
+        region_x1: int,
+        region_y1: int,
+    ) -> np.ndarray:
+        """Render the full-mask raster exactly without a full-frame allocation."""
+
+        region_width = region_x1 - region_x0
+        region_height = region_y1 - region_y0
+        if contour is None or contour_yx is None:
+            yy, xx = np.ogrid[region_y0:region_y1, region_x0:region_x1]
+            return (
+                (xx - geometry.center_x) ** 2
+                + (yy - geometry.center_y) ** 2
+                <= geometry.radius_px**2
+            )
+
+        segment_intersects = np.any(
+            (segment_max_x >= region_x0)
+            & (segment_min_x < region_x1)
+            & (segment_max_y >= region_y0)
+            & (segment_min_y < region_y1)
+        )
+        if not segment_intersects:
+            inside = bool(
+                points_in_poly(
+                    np.asarray([[region_y0, region_x0]], dtype=np.float64),
+                    contour_yx,
+                )[0]
+            )
+            return np.full((region_height, region_width), inside, dtype=bool)
+
+        result = np.empty((region_height, region_width), dtype=bool)
+        # Bound coordinate workspace independently of the output raster.  The
+        # result itself is the ordinary tile mask accounted for by
+        # max_mask_tile_pixels; point batches stay below about 262k pixels.
+        batch_point_limit = min(region_raster_limit, 262_144)
+        rows_per_batch = max(1, batch_point_limit // max(1, region_width))
+        for local_y0 in range(0, region_height, rows_per_batch):
+            local_y1 = min(region_height, local_y0 + rows_per_batch)
+            yy, xx = np.indices((local_y1 - local_y0, region_width))
+            coordinates_yx = np.column_stack(
+                (
+                    (yy + region_y0 + local_y0).ravel(),
+                    (xx + region_x0).ravel(),
+                )
+            )
+            result[local_y0:local_y1] = points_in_poly(
+                coordinates_yx, contour_yx
+            ).reshape(local_y1 - local_y0, region_width)
+
+        if len(contour_outline):
+            in_region = (
+                (contour_outline[:, 0] >= region_x0)
+                & (contour_outline[:, 0] < region_x1)
+                & (contour_outline[:, 1] >= region_y0)
+                & (contour_outline[:, 1] < region_y1)
+            )
+            outline = contour_outline[in_region]
+            result[
+                outline[:, 1] - region_y0,
+                outline[:, 0] - region_x0,
+            ] = True
+        return result
+
+    for core_y in range(0, geometry.image_height, size):
+        core_height = min(size, geometry.image_height - core_y)
+        for core_x in range(0, geometry.image_width, size):
+            core_width = min(size, geometry.image_width - core_x)
+            x0 = max(0, core_x - 1)
+            y0 = max(0, core_y - 1)
+            x1 = min(geometry.image_width, core_x + core_width + 1)
+            y1 = min(geometry.image_height, core_y + core_height + 1)
+
+            # _build_analysis_masks_tile internally adds the edge-exclusion
+            # halo.  Track that largest temporary source mask for audit/tests.
+            working_x0 = max(0, x0 - edge_halo)
+            working_y0 = max(0, y0 - edge_halo)
+            working_x1 = min(geometry.image_width, x1 + edge_halo)
+            working_y1 = min(geometry.image_height, y1 + edge_halo)
+            max_mask_tile_pixels = max(
+                max_mask_tile_pixels,
+                (working_x1 - working_x0) * (working_y1 - working_y0),
+            )
+
+            expanded_full = exact_full_wafer_region(
+                working_x0,
+                working_y0,
+                working_x1,
+                working_y1,
+            )
+            expanded_edge = _edge_exclusion_from_full(expanded_full, edge_width_px)
+            selector = (
+                slice(y0 - working_y0, y1 - working_y0),
+                slice(x0 - working_x0, x1 - working_x0),
+            )
+            full = expanded_full[selector]
+            edge = expanded_edge[selector]
+            raster_invalid = create_invalid_mask_tile(
+                geometry,
+                x0,
+                y0,
+                x1 - x0,
+                y1 - y0,
+                invalid_regions=None,
+                rectangles=None,
+                polygons=None,
+                supplied_mask=invalid_mask,
+            )
+            valid = full & ~edge & ~raster_invalid
+
+            # Union all analytic exclusions into this halo tile before finding
+            # invalid pixels adjacent to valid.  This removes boundaries hidden
+            # by overlaps, by the edge-exclusion band, or by the wafer exterior.
+            analytic_invalid = np.zeros_like(valid, dtype=bool)
+            for rect_x0, rect_y0, rect_x1, rect_y1 in rectangle_cache:
+                overlap_x0 = max(x0, rect_x0)
+                overlap_y0 = max(y0, rect_y0)
+                overlap_x1 = min(x1, rect_x1)
+                overlap_y1 = min(y1, rect_y1)
+                if overlap_x1 > overlap_x0 and overlap_y1 > overlap_y0:
+                    analytic_invalid[
+                        overlap_y0 - y0 : overlap_y1 - y0,
+                        overlap_x0 - x0 : overlap_x1 - x0,
+                    ] = True
+            for polygon_x0, polygon_y0, polygon_mask in polygon_cache:
+                polygon_y1 = polygon_y0 + polygon_mask.shape[0]
+                polygon_x1 = polygon_x0 + polygon_mask.shape[1]
+                overlap_x0 = max(x0, polygon_x0)
+                overlap_y0 = max(y0, polygon_y0)
+                overlap_x1 = min(x1, polygon_x1)
+                overlap_y1 = min(y1, polygon_y1)
+                if overlap_x1 <= overlap_x0 or overlap_y1 <= overlap_y0:
+                    continue
+                analytic_invalid[
+                    overlap_y0 - y0 : overlap_y1 - y0,
+                    overlap_x0 - x0 : overlap_x1 - x0,
+                ] |= polygon_mask[
+                    overlap_y0 - polygon_y0 : overlap_y1 - polygon_y0,
+                    overlap_x0 - polygon_x0 : overlap_x1 - polygon_x0,
+                ]
+            valid &= ~analytic_invalid
+            valid_u8 = valid.astype(np.uint8, copy=False)
+            adjacent_to_valid = cv2.dilate(
+                valid_u8,
+                adjacency_kernel,
+                borderType=cv2.BORDER_CONSTANT,
+                borderValue=0,
+            ).astype(bool)
+            invalid_boundary = ~valid & adjacent_to_valid
+
+            local_x = core_x - x0
+            local_y = core_y - y0
+            core_boundary = invalid_boundary[
+                local_y : local_y + core_height,
+                local_x : local_x + core_width,
+            ]
+            rows, cols = np.nonzero(core_boundary)
+            if len(rows):
+                append_points(
+                    np.column_stack((cols + core_x, rows + core_y))
+                )
+
+    points = np.concatenate(chunks, axis=0)
+    return ValidBoundaryIndex(
+        points,
+        max_mask_tile_pixels=max_mask_tile_pixels,
+        scan_tile_size=size,
+    )
+
+
 def iter_analysis_mask_tiles(
     geometry: WaferGeometry,
     *,
@@ -969,9 +1423,11 @@ __all__ = [
     "AnalysisMaskTile",
     "AnalysisMasks",
     "AreaStatistics",
+    "ValidBoundaryIndex",
     "WaferDetectionError",
     "WaferGeometry",
     "build_analysis_masks",
+    "build_valid_boundary_index",
     "calculate_area_statistics",
     "calculate_valid_area",
     "compute_pixel_scale",

@@ -159,7 +159,7 @@
       <div class="shell use-grid">
         <div>
           <h2>网页快速分析，超大图使用本机工作台</h2>
-          <p><a href="analyze.html">浏览器分析页</a>可上传常规图像，并在当前标签页的 Pyodide Web Worker 中运行同一 Python 科研管线，生成缺陷对照图、整片密度热图、HTML 报告和 ZIP；原图不会上传到服务器。超大 TIFF / BigTIFF 仍应使用下方本机分块路径。</p>
+          <p><a href="analyze.html">浏览器分析页</a>可选择最高 100 MiB 的图像，并在 Pyodide Web Worker 中只读挂载原始 <code>File</code>、运行同一 Python 科研管线。普通栅格和 TIFF/BigTIFF 采用不同安全层级；后者只有在有界随机访问后端可用时才按 1024 px 重叠 tile 保持原分辨率分析。页面不会静默压缩或降采样，大型 CSV 只在完整 ZIP 中返回；原图不会上传到服务器。</p>
           <div class="code-block" role="region" aria-label="安装与运行命令" tabindex="0"><pre><code>git clone https://github.com/sma084545-pixel/sic-wafer-point-counter.git
 cd sic-wafer-point-counter
 python3.10 -m venv .venv

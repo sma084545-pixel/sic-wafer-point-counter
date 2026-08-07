@@ -23,6 +23,14 @@ io:
   normalization_high_percentile: 99.0
   respect_tiff_photometric: true
   large_image_threshold_pixels: 25000000
+  # Native runs keep the existing read-only memmap-first behaviour. Browser
+  # workers can set prefer_bounded_tiff_regions=true and disable both memmap
+  # and full decode after mounting a seekable File/Blob filesystem.
+  prefer_bounded_tiff_regions: false
+  allow_tiff_memmap: true
+  allow_tiff_full_decode: true
+  tiff_max_decoded_segment_bytes: 67108864
+  tiff_row_band_cache_bytes: 67108864
   max_overlay_size: 6000
 
 preprocessing:

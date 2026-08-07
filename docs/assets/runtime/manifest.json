@@ -1,19 +1,37 @@
 {
-  "runtime_schema_version": 1,
+  "runtime_schema_version": 2,
   "pyodide_version": "314.0.4",
   "package_wheel": {
-    "file": "sic_wafer_point_counter-0.2.0-py3-none-any.whl",
-    "sha256": "7e9bd7baebfa01255ecaa679ed33c346323eacca6ec4a4dcb97aca8b7bb3484d"
+    "file": "sic_wafer_point_counter-0.2.1-py3-none-any.whl",
+    "sha256": "b548beacacd068254e1abbc8c9651cc508f97385b8be5d8c3929293ea5f75f0a"
   },
   "tifffile_wheel": {
     "file": "tifffile-2025.5.10-py3-none-any.whl",
     "sha256": "e37147123c0542d67bc37ba5cdd67e12ea6fbe6e86c52bee037a9eb6a064e5ad"
   },
   "limits": {
-    "max_file_bytes": 25165824,
-    "max_pixels": 6000000,
-    "max_dimension_px": 6000,
+    "selection": {
+      "max_file_bytes": 104857600
+    },
+    "raster_full_array": {
+      "max_file_bytes": 25165824,
+      "max_pixels": 6000000,
+      "max_dimension_px": 6000
+    },
+    "tiff_bounded": {
+      "max_file_bytes": 104857600,
+      "max_pixels": 120000000,
+      "max_dimension_px": 16000,
+      "tile_size_px": 1024,
+      "tile_overlap_px": 128,
+      "require_bounded_random_access": true
+    },
+    "output_transfer": {
+      "max_inline_artifact_bytes": 8388608,
+      "max_inline_csv_bytes": 2097152,
+      "max_bundle_bytes": 134217728
+    },
     "max_overlay_size_px": 2000
   },
-  "scientific_runtime": "same analyze_image pipeline; full-resolution 4 mm automatic red-box detail fields (independent reference not provided), red-box overview, and actual-mask area-normalized density heatmap/grid enabled; per-candidate crops disabled in browser"
+  "scientific_runtime": "same analyze_image pipeline; File is mounted read-only through WORKERFS; TIFF/BigTIFF requires a bounded random-access source backend and overlap-tiled full-resolution analysis with 1024 px tiles; analysis downsample factor is fixed at 1; large CSV tables remain in the complete ZIP instead of being duplicated into page memory"
 }

@@ -13,12 +13,17 @@ classification uncertainty, and a dislocation interpretation remain
 unavailable until expert-labelled real SiC data are supplied.
 
 The GitHub Pages companion at `docs/analyze.html` adds a bounded browser-only
-path for conventional images. It downloads a pinned Pyodide runtime, verifies
-the packaged project wheel by SHA-256, and calls the same `analyze_image`
-function in a Web Worker. Uploaded bytes remain inside that tab's temporary
-filesystem. It intentionally refuses files above 24 MiB, 6 million pixels, or
-6000 px on either side; the local workbench remains the supported BigTIFF/tiled
-path.
+path. It downloads a pinned Pyodide runtime, verifies the packaged project
+wheel by SHA-256, and calls the same `analyze_image` function in a Web Worker.
+The original `File` is mounted read-only through WORKERFS instead of being
+copied into main-thread and MEMFS buffers. Files may be selected up to 100 MiB,
+but release is format-tiered: raster formats retain the 24 MiB / 6 MP / 6000 px
+full-array limits, while compatible scalar 2-D TIFF/BigTIFF may use the bounded
+random-access backend up to 100 MiB / 120 MP / 16000 px and are analysed at
+source resolution with 1024 px overlapping tiles. Unsupported axes, codec or
+segment layouts, absent bounded access, oversized result archives, and memory
+failures stop without displaying density; they never trigger hidden downsampling
+or full-image TIFF fallback.
 
 ## Information architecture
 
@@ -92,7 +97,13 @@ page count, and rejection-reason counts.
   holds one page and renders at most 200 rows.
 - Missing crops do not trigger TIFF reads or on-demand image processing.
 - The scientific pipeline retains its preview/tile/memory-map/optional-pyvips
-  behaviour. The browser layer does not materialize a lazy BigTIFF.
+  behaviour. Browser TIFF runs force `prefer_bounded_tiff_regions`, disable
+  memory-map and full-decode fallbacks, and require audit metadata proving
+  `source_region_read_bounded=true` and
+  `decoded_full_source_resident=false` before a result is exposed.
+- Large candidate CSVs remain complete in the ZIP but are not also transferred
+  as individual browser buffers; small report and preview artifacts remain
+  directly viewable.
 
 ## macOS runtime
 
@@ -116,6 +127,30 @@ only on narrow screens.
 The implementation uses ordinary semantic HTML, CSS, and ES modules. Current
 Safari and Firefox are expected to support the core flow, but this release did
 not perform equivalent visual regression captures in those browsers.
+
+### Browser large-TIFF release validation
+
+Version 0.2.1 was exercised end to end in Chrome 151 against the locally served
+GitHub Pages files. The deterministic fixture was a 93.5 MiB, 7000×7000,
+uint16, scalar `YX`, uncompressed one-strip TIFF containing 96 synthetic dark
+points. The browser completed 45 source-resolution tiles in 809.585 seconds on
+the validation machine and reported the same count, valid area, and density as
+the native run: `n=96`, `S=78.5392950052 cm²`, and
+`rho=1.2223180765 cm^-2`. Its summary recorded
+`WORKERFS_read_only_File`,
+`tifffile.bounded-regions(direct-uncompressed-strips)`,
+`source_region_read_bounded=true`,
+`decoded_full_source_resident=false`, float32 analysis,
+`analysis_downsample_factor=1`, and no scientific downsampling. The 6,372,496
+byte ZIP contained 29 files, passed CRC testing, and included all three defect
+tables, mask, red-box/detail views, area-normalized heatmap/grid, HTML report,
+and summary.
+
+This validates that exact layout and execution path; it is not a claim that
+every TIFF near 100 MiB is supported, nor evidence of accuracy on real SiC.
+Unsupported codecs, oversized compressed segments, multidimensional series,
+and environments without WORKERFS/bounded access remain fail-closed and should
+use the native workbench.
 
 ## Demonstration
 

@@ -9,7 +9,7 @@
   <title>浏览器分析｜SiC 晶圆点状目标平台</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/analyze.css?v=20260807a">
-  <script type="module" src="assets/analyze.js?v=20260808a"></script>
+  <script type="module" src="assets/analyze.js?v=20260808b"></script>
 </head>
 <body>
   <a class="skip-link" href="#content">跳到主要内容</a>
@@ -37,7 +37,7 @@
     <section class="intro shell">
       <p class="eyebrow">本地浏览器运行 · 无服务器上传</p>
       <h1>上传晶圆图像，生成可复核分析报告</h1>
-      <p class="intro-copy">该页面在独立 Web Worker 中运行项目打包的原始 Python <code>analyze_image</code> 管线。文件只写入当前标签页的临时内存，不上传到网站服务器。</p>
+      <p class="intro-copy">该页面在独立 Web Worker 中运行项目打包的原始 Python <code>analyze_image</code> 管线。原始 <code>File</code> 以只读方式挂载，不在主线程整体读取，也不上传到网站服务器。</p>
       <div class="boundary" role="note" aria-label="科学解释边界">
         <strong>科学解释边界</strong>
         <p>这里统计的是满足当前图像判定和筛选规则的黑色点状目标。未经材料专家标注或独立实验确认，不得把每个黑点无条件解释为真实物理位错。</p>
@@ -48,14 +48,14 @@
       <form class="control-panel" id="analysis-form">
         <div class="panel-heading">
           <div><p class="step">01</p><h2 id="upload-title">图像与参数</h2></div>
-          <span class="privacy-badge">仅本机内存</span>
+          <span class="privacy-badge">仅本机浏览器</span>
         </div>
 
         <label class="drop-zone" for="image-file" id="drop-zone">
           <span class="drop-icon" aria-hidden="true">＋</span>
           <strong>选择或拖入晶圆图像</strong>
-          <span>PNG、JPG、BMP、TIF、TIFF</span>
-          <input id="image-file" name="image-file" type="file" accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,image/png,image/jpeg,image/bmp,image/tiff">
+          <span>PNG、JPG、BMP、TIF、TIFF、BigTIFF（选择上限 100 MiB）</span>
+          <input id="image-file" name="image-file" type="file" accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.btf,.bigtif,.bigtiff,image/png,image/jpeg,image/bmp,image/tiff">
         </label>
         <div class="file-line" id="file-line" aria-live="polite">尚未选择文件</div>
         <button class="button button-secondary" id="demo-button" type="button">载入内置 clean 合成样本</button>
@@ -82,7 +82,7 @@
 
         <p class="limit-note" id="browser-limits">正在读取浏览器分析上限…</p>
         <div class="form-actions">
-          <button class="button" id="analyze-button" type="submit">开始完整分析</button>
+          <button class="button" id="analyze-button" type="submit" disabled>开始完整分析</button>
           <button class="button button-secondary" id="cancel-button" type="button" hidden>取消本次运行</button>
         </div>
       </form>
@@ -95,13 +95,13 @@
         </div>
         <progress id="analysis-progress" max="1" value="0" aria-label="分析进度"></progress>
         <ol class="process-list">
-          <li>验证文件与浏览器内存上限</li>
-          <li>载入科学计算运行时和项目代码</li>
+          <li>先验证文件大小，再载入科学计算运行时</li>
+          <li>在 Worker 中只读挂载 File，按 TIFF axes 核对源分辨率</li>
           <li>晶圆识别、预处理、候选分割与筛选</li>
           <li>计算有效面积、密度和计数区间</li>
           <li>生成论文风格局部视场（独立参考未提供）、缺陷对照图、整片缺陷密度热图与报告</li>
         </ol>
-        <p class="runtime-note">首次运行需从 jsDelivr 下载 Pyodide 与科学计算包，之后浏览器通常可复用缓存。运算期间页面仍可响应；可随时取消。</p>
+        <p class="runtime-note">首次运行需从 jsDelivr 下载 Pyodide 与科学计算包，之后浏览器通常可复用缓存。TIFF 必须通过有界随机访问后端运行 1024 px 重叠 tile；若后端、尺寸或输出包不满足安全清单，页面会停止且不显示密度。运算期间可随时取消。</p>
       </aside>
     </section>
 
@@ -135,14 +135,14 @@
       </section>
 
       <section class="artifact-card" aria-labelledby="download-title">
-        <div class="artifact-heading"><div><h3 id="download-title">单项文件</h3><p>可分别下载 CSV、JSON、掩膜、对照图、密度热图与日志。</p></div></div>
+        <div class="artifact-heading"><div><h3 id="download-title">单项文件</h3><p>小型 CSV、JSON、掩膜、对照图、密度热图与日志可直接下载；超过页面传输阈值的大 CSV 标记为“仅 ZIP”，仍完整保留在结果包中。</p></div></div>
         <ul class="download-list" id="download-list"></ul>
       </section>
     </section>
 
     <section class="local-fallback shell" aria-labelledby="large-title">
-      <h2 id="large-title">超大 TIFF / BigTIFF 请使用本机工作台</h2>
-      <p>浏览器模式为可靠性和内存安全设置了明确上限，不会假装支持超大图分块。完整本机版本保留 memory-map、可选 pyvips、重叠 tile、全分辨率候选裁剪和人工复核。</p>
+      <h2 id="large-title">超过网页安全清单的 TIFF / BigTIFF 请使用本机工作台</h2>
+      <p>网页允许选择最高 100 MiB，但仍会按格式、源像素、单边尺寸、有界随机访问能力和输出包大小逐层预检。任一条件不满足都会明确停止，不会静默压缩、降采样或展示不可靠密度。完整本机版本保留更多大图后端、重叠 tile、全分辨率候选裁剪和人工复核。</p>
       <a href="https://github.com/sma084545-pixel/sic-wafer-point-counter#readme">查看本机安装与运行说明 <span aria-hidden="true">→</span></a>
     </section>
   </main>

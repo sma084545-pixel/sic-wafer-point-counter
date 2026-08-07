@@ -45,9 +45,11 @@ from .utils import atomic_write_json, atomic_write_yaml, software_versions, utc_
 from .wafer_detection import (
     AnalysisMasks,
     AreaStatistics,
+    ValidBoundaryIndex,
     WaferDetectionError,
     WaferGeometry,
     build_analysis_masks,
+    build_valid_boundary_index,
     calculate_area_statistics,
     create_edge_exclusion_mask,
     create_full_wafer_mask_tile,
@@ -317,71 +319,50 @@ def _exact_tile_valid_boundary_distance(
     invalid_regions: Sequence[Any],
     invalid_mask: np.ndarray | None,
     initial_margin_px: int,
+    boundary_index: ValidBoundaryIndex | None = None,
 ) -> np.ndarray:
-    """Return an exact final-mask distance map for a tile without reading image pixels.
+    """Return exact candidate distances without a full-frame distance raster.
 
-    A tile-local distance transform would incorrectly treat a tile edge as a
-    wafer/invalid boundary.  Instead, build progressively larger *mask-only*
-    crops until every labelled candidate has a true boundary inside the crop.
-    Only a tile containing a candidate far from every real boundary expands
-    substantially; source-image data are never materialised for this step.
+    Only labelled pixels receive values in the returned tile-sized array;
+    feature extraction reads exactly those positions.  The shared boundary
+    index contains every invalid pixel adjacent to the final valid mask, so its
+    nearest-neighbour result equals the Euclidean distance transform while the
+    temporary raster memory remains tile-bounded.
+
+    ``initial_margin_px`` is retained for compatibility with older callers;
+    when an index is not supplied it determines a conservative scan-tile size.
     """
 
-    candidate_rows, candidate_cols = np.nonzero(np.asarray(labels) > 0)
-    margin = max(1, int(initial_margin_px))
-    while True:
-        x0 = max(0, tile.x - margin)
-        y0 = max(0, tile.y - margin)
-        x1 = min(geometry.image_width, tile.x + tile.width + margin)
-        y1 = min(geometry.image_height, tile.y + tile.height + margin)
-        region_tile = ImageTile(
-            image=np.empty((y1 - y0, x1 - x0), dtype=np.uint8),
-            x=x0,
-            y=y0,
-            width=x1 - x0,
-            height=y1 - y0,
-            core_x=x0,
-            core_y=y0,
-            core_width=x1 - x0,
-            core_height=y1 - y0,
+    label_image = np.asarray(labels)
+    if label_image.shape != (tile.height, tile.width):
+        raise ValueError("labels shape must match the tile dimensions")
+    candidate_rows, candidate_cols = np.nonzero(label_image > 0)
+    result = np.zeros(label_image.shape, dtype=np.float32)
+    if not len(candidate_rows):
+        return result
+    if boundary_index is None:
+        scan_size = max(
+            32,
+            min(
+                2048,
+                max(tile.width, tile.height, int(initial_margin_px) * 2),
+            ),
         )
-        expanded = _tile_masks(
+        boundary_index = build_valid_boundary_index(
             geometry,
-            region_tile,
+            tile_size=scan_size,
             exclude_edge_mm=exclude_edge_mm,
             invalid_regions=invalid_regions,
             invalid_mask=invalid_mask,
-        ).valid_analysis_mask
-        full_extent = x0 == 0 and y0 == 0 and x1 == geometry.image_width and y1 == geometry.image_height
-        if full_extent:
-            # The image exterior is invalid.  Padding only at full extent makes
-            # that physical boundary explicit without inventing a boundary for
-            # an intermediate crop.
-            distance = valid_boundary_distance_transform(
-                np.pad(expanded, 1, mode="constant", constant_values=False)
-            )[1:-1, 1:-1]
-        else:
-            distance = valid_boundary_distance_transform(expanded)
-        local_y, local_x = tile.y - y0, tile.x - x0
-        local_distance = distance[
-            local_y : local_y + tile.height,
-            local_x : local_x + tile.width,
-        ]
-        if not len(candidate_rows) or full_extent:
-            return local_distance
-        rows = candidate_rows + local_y
-        cols = candidate_cols + local_x
-        crop_edge_distance = np.minimum.reduce(
-            (rows, cols, expanded.shape[0] - 1 - rows, expanded.shape[1] - 1 - cols)
+            use_contour=True,
         )
-        # Strict inequality means the nearest zero lies inside this crop, not
-        # at an unknown continuation beyond it.  Values use pixel units.
-        if np.all(distance[rows, cols] < crop_edge_distance):
-            return local_distance
-        next_margin = max(margin + 1, margin * 2)
-        if next_margin == margin:
-            return local_distance
-        margin = next_margin
+    global_coordinates_yx = np.column_stack(
+        (candidate_rows + tile.y, candidate_cols + tile.x)
+    )
+    result[candidate_rows, candidate_cols] = boundary_index.query_yx(
+        global_coordinates_yx
+    )
+    return result
 
 
 def _globalize_record(record: dict[str, Any], tile: ImageTile) -> dict[str, Any]:
@@ -590,6 +571,18 @@ def _detect_large(
             "Adaptive thresholding is necessarily tile-local; inspect overlap consistency"
         )
 
+    # Build one exact, bounded-memory index of the final valid boundary.  The
+    # previous per-tile expansion could grow a central tile to the complete
+    # wafer before its nearest boundary became visible.
+    boundary_index = build_valid_boundary_index(
+        geometry,
+        tile_size=tile_size,
+        exclude_edge_mm=exclude_edge_mm,
+        invalid_regions=invalid_regions,
+        invalid_mask=invalid_mask,
+        use_contour=True,
+    )
+
     for tile in image_data.iter_tiles(tile_size=tile_size, overlap=overlap):
         masks = _tile_masks(
             geometry,
@@ -618,6 +611,7 @@ def _detect_large(
             invalid_regions=invalid_regions,
             invalid_mask=invalid_mask,
             initial_margin_px=max(overlap, 32),
+            boundary_index=boundary_index,
         )
 
         before_labels = connected_label(detection.candidate_mask_before_watershed)

@@ -10,6 +10,7 @@ import pytest
 import tifffile
 
 from sic_wafer_counter.image_io import (
+    ImageReadError,
     load_image,
     normalize_to_float32,
     normalize_to_uint8,
@@ -27,6 +28,24 @@ def _config(*, threshold: int = 1_000_000) -> dict[str, object]:
             "respect_tiff_photometric": True,
         }
     }
+
+
+def _bounded_config(
+    *, threshold: int = 1, max_segment_bytes: int = 1024 * 1024
+) -> dict[str, object]:
+    config = _config(threshold=threshold)
+    io = config["io"]
+    assert isinstance(io, dict)
+    io.update(
+        {
+            "prefer_bounded_tiff_regions": True,
+            "allow_tiff_memmap": False,
+            "allow_tiff_full_decode": False,
+            "tiff_max_decoded_segment_bytes": max_segment_bytes,
+            "tiff_row_band_cache_bytes": max_segment_bytes,
+        }
+    )
+    return config
 
 
 @pytest.mark.parametrize(
@@ -122,3 +141,117 @@ def test_lazy_path_does_not_materialize_full_analysis_array(tmp_path: Path) -> N
         tile = next(data.iter_tiles(tile_size=32, overlap=4))
         assert tile.image.dtype == np.float32
         assert data.gray is None
+
+
+def test_bounded_uncompressed_tiff_regions_full_and_tiles_are_identical(
+    tmp_path: Path,
+) -> None:
+    """The browser-safe path preserves big-endian uint16 source pixels exactly."""
+
+    image = (
+        np.arange(173 * 211, dtype=np.uint32).reshape(173, 211) * 37 % 65_521
+    ).astype(np.uint16)
+    path = tmp_path / "bounded_contiguous_big_endian.tif"
+    tifffile.imwrite(
+        path,
+        image,
+        byteorder=">",
+        rowsperstrip=image.shape[0],
+    )
+    with load_image(
+        path,
+        _bounded_config(threshold=1_000_000),
+        lazy=False,
+        prefer_pyvips=False,
+    ) as data:
+        assert data.metadata.loader == (
+            "tifffile.bounded-regions(direct-uncompressed-strips)"
+        )
+        assert data.metadata.random_access is True
+        assert data.metadata.extrema_exact is False
+        assert data.metadata.source_region_read_bounded is True
+        assert data.metadata.decoded_full_source_resident is False
+        metadata = data.metadata.to_dict()
+        assert metadata["source_region_read_bounded"] is True
+        assert metadata["decoded_full_source_resident"] is False
+        assert any(
+            "not materialized as a full decoded array" in item
+            for item in data.metadata.limitations
+        )
+        raw_region = data.source.read_region_raw(47, 39, 89, 71)
+        assert np.array_equal(raw_region, image[39:110, 47:136])
+
+        full = data.require_full()
+        covered = np.zeros(image.shape, dtype=bool)
+        for tile in data.iter_tiles(tile_size=53, overlap=7):
+            expected = full[
+                tile.y : tile.y + tile.height,
+                tile.x : tile.x + tile.width,
+            ]
+            assert np.array_equal(tile.image, expected)
+            covered[
+                tile.y : tile.y + tile.height,
+                tile.x : tile.x + tile.width,
+            ] = True
+        assert covered.all()
+
+
+@pytest.mark.parametrize(
+    "write_options",
+    [
+        {"rowsperstrip": 23, "compression": "deflate"},
+        {"tile": (32, 32), "compression": "deflate"},
+    ],
+    ids=["compressed-strips", "compressed-tiles"],
+)
+def test_bounded_intersecting_segment_decode_matches_source(
+    tmp_path: Path, write_options: dict[str, object]
+) -> None:
+    rng = np.random.default_rng(20260808)
+    image = rng.integers(0, 65_535, size=(137, 181), dtype=np.uint16)
+    path = tmp_path / "bounded_segments.tif"
+    tifffile.imwrite(path, image, **write_options)
+    with load_image(
+        path,
+        _bounded_config(threshold=1_000_000),
+        lazy=False,
+        prefer_pyvips=False,
+    ) as data:
+        assert data.metadata.loader == (
+            "tifffile.bounded-regions(intersecting-strip-tile-decode)"
+        )
+        raw_region = data.source.read_region_raw(31, 27, 101, 83)
+        assert np.array_equal(raw_region, image[27:110, 31:132])
+        expected_full = normalize_to_float32(
+            image,
+            data.metadata.normalization_low_value,
+            data.metadata.normalization_high_value,
+        )
+        assert np.array_equal(data.require_full(), expected_full)
+
+
+def test_oversized_compressed_single_strip_refuses_without_full_decode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    image = np.arange(128 * 256, dtype=np.uint16).reshape(128, 256)
+    path = tmp_path / "oversized_compressed_single_strip.tif"
+    tifffile.imwrite(
+        path,
+        image,
+        rowsperstrip=image.shape[0],
+        compression="deflate",
+    )
+
+    def forbidden_full_decode(*_args: object, **_kwargs: object) -> np.ndarray:
+        raise AssertionError("tifffile.imread must not be called")
+
+    monkeypatch.setattr(tifffile, "imread", forbidden_full_decode)
+    with pytest.raises(
+        ImageReadError,
+        match="full-image TIFF decoding is disabled.*would decode to",
+    ):
+        load_image(
+            path,
+            _bounded_config(threshold=1, max_segment_bytes=4096),
+            prefer_pyvips=False,
+        )

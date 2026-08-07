@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import zipfile
 from html.parser import HTMLParser
 from pathlib import Path
 
@@ -45,7 +46,12 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
     assert parser.h1_count == 1
     assert parser.form_count == 1
     assert {"image-file", "diameter", "edge-exclusion", "watershed"} <= set(parser.inputs)
-    assert "文件只写入当前标签页的临时内存，不上传到网站服务器" in html
+    assert "原始 <code>File</code> 以只读方式挂载" in html
+    assert "不在主线程整体读取，也不上传到网站服务器" in html
+    assert "选择上限 100 MiB" in html
+    assert "不会静默压缩、降采样或展示不可靠密度" in html
+    assert 'id="analyze-button" type="submit" disabled' in html
+    assert "大 CSV 标记为“仅 ZIP”" in html
     assert "自动 XRT 点状候选红框图" in html
     assert "论文风格局部视场" in html
     assert "独立参考未提供" in html
@@ -53,7 +59,7 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
     assert "整片密度热图" in html
     assert "未经材料专家标注或独立实验确认" in html
     assert "下载完整结果 ZIP" in html
-    assert parser.scripts == ["assets/analyze.js?v=20260808a"]
+    assert parser.scripts == ["assets/analyze.js?v=20260808b"]
     assert (DOCS / "assets" / "demo" / "synthetic_clean.png").is_file()
 
 
@@ -72,21 +78,98 @@ def test_worker_calls_packaged_pipeline_and_keeps_browser_limits_explicit() -> N
     assert "fetch(" not in worker.replace("fetch(MANIFEST_URL", "").replace("fetch(url", "")
 
 
+def test_browser_transfers_file_directly_and_worker_mounts_it_read_only() -> None:
+    main = (DOCS / "assets" / "analyze.js").read_text(encoding="utf-8")
+    worker = (DOCS / "assets" / "analysis-worker.mjs").read_text(encoding="utf-8")
+
+    assert "worker.postMessage({ type: \"analyze\", file: runFile, options })" in main
+    assert ".arrayBuffer(" not in main
+    assert "fileBuffer" not in main
+    assert "WORKERFS" in worker
+    assert "FS.mount(workerFs, { files: [file] }, INPUT_MOUNT)" in worker
+    assert 'input_transport: "WORKERFS_read_only_File"' in worker
+    assert "message.fileBuffer" not in worker
+    assert "new Uint8Array(message.fileBuffer)" not in worker
+    assert "FS.writeFile(inputPath" not in worker
+
+
+def test_worker_tiff_preflight_uses_axes_and_forces_bounded_tiling() -> None:
+    worker = (DOCS / "assets" / "analysis-worker.mjs").read_text(encoding="utf-8")
+
+    assert "series.axes" in worker
+    assert 'shape[axes.index("X")]' in worker
+    assert 'shape[axes.index("Y")]' in worker
+    assert "shape[-2]" not in worker and "shape[-1]" not in worker
+    assert 'config["io"]["tile_size"] = int(options["tier_limits"]["tile_size_px"])' in worker
+    assert 'config["io"]["large_image_threshold_pixels"] = 1' in worker
+    assert 'config["io"]["prefer_bounded_tiff_regions"] = True' in worker
+    assert 'config["io"]["allow_tiff_memmap"] = False' in worker
+    assert 'config["io"]["allow_tiff_full_decode"] = False' in worker
+    assert "source_region_read_bounded" in worker
+    assert "decoded_full_source_resident" in worker
+    assert "TIFF_BOUNDED_BACKEND_REQUIRED" in worker
+
+
+def test_worker_records_full_resolution_provenance_and_bounds_output_transfer() -> None:
+    worker = (DOCS / "assets" / "analysis-worker.mjs").read_text(encoding="utf-8")
+    main = (DOCS / "assets" / "analyze.js").read_text(encoding="utf-8")
+
+    assert 'summary["input_transport"] = options["input_transport"]' in worker
+    assert 'summary["source_resolution_px"] = list(options["source_resolution_px"])' in worker
+    assert 'summary["analysis_downsample_factor"] = 1' in worker
+    assert 'summary["scientific_downsampling_applied"] = False' in worker
+    assert "max_inline_csv_bytes" in worker
+    assert "max_bundle_bytes" in worker
+    assert "bundleOnlyArtifacts.push(name)" in worker
+    assert "OUTPUT_BUNDLE_LIMIT_EXCEEDED" in worker
+    assert "bundleOnlyArtifacts" in main
+    assert "仅 ZIP" in main
+    assert 'results.hidden = true' in main
+    assert 'payload.error || payload.message' in main
+
+
 def test_browser_runtime_manifest_matches_published_wheels() -> None:
     runtime = DOCS / "assets" / "runtime"
     manifest = json.loads((runtime / "manifest.json").read_text(encoding="utf-8"))
     assert manifest["pyodide_version"] == "314.0.4"
+    assert manifest["runtime_schema_version"] == 2
     assert manifest["limits"] == {
-        "max_file_bytes": 25165824,
-        "max_pixels": 6000000,
-        "max_dimension_px": 6000,
+        "selection": {"max_file_bytes": 104857600},
+        "raster_full_array": {
+            "max_file_bytes": 25165824,
+            "max_pixels": 6000000,
+            "max_dimension_px": 6000,
+        },
+        "tiff_bounded": {
+            "max_file_bytes": 104857600,
+            "max_pixels": 120000000,
+            "max_dimension_px": 16000,
+            "tile_size_px": 1024,
+            "tile_overlap_px": 128,
+            "require_bounded_random_access": True,
+        },
+        "output_transfer": {
+            "max_inline_artifact_bytes": 8388608,
+            "max_inline_csv_bytes": 2097152,
+            "max_bundle_bytes": 134217728,
+        },
         "max_overlay_size_px": 2000,
     }
+    assert "bounded random-access source backend" in manifest["scientific_runtime"]
+    assert "memmap" not in manifest["scientific_runtime"].lower()
     for key in ("package_wheel", "tifffile_wheel"):
         entry = manifest[key]
         wheel = runtime / entry["file"]
         assert wheel.is_file()
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
+
+    project_wheel = runtime / manifest["package_wheel"]["file"]
+    with zipfile.ZipFile(project_wheel) as archive:
+        packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")
+    assert "prefer_bounded_tiff_regions" in packaged_image_io
+    assert "source_region_read_bounded" in packaged_image_io
+    assert "decoded_full_source_resident" in packaged_image_io
+    assert "allow_tiff_full_decode" in packaged_image_io
 
 
 def test_detail_comparison_contains_accepted_and_rejected_markers(tmp_path: Path) -> None:
