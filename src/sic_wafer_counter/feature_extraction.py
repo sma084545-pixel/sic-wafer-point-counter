@@ -31,8 +31,11 @@ DEFECT_COLUMNS: tuple[str, ...] = (
     "perimeter_px",
     "equivalent_diameter_px",
     "equivalent_diameter_mm",
+    "equivalent_diameter_um",
     "major_axis_length_px",
     "minor_axis_length_px",
+    "major_axis_length_um",
+    "minor_axis_length_um",
     "aspect_ratio",
     "eccentricity",
     "circularity",
@@ -175,8 +178,11 @@ class DefectFeature:
     perimeter_px: float
     equivalent_diameter_px: float
     equivalent_diameter_mm: float
+    equivalent_diameter_um: float
     major_axis_length_px: float
     minor_axis_length_px: float
+    major_axis_length_um: float
+    minor_axis_length_um: float
     aspect_ratio: float
     eccentricity: float
     circularity: float
@@ -506,8 +512,11 @@ def extract_candidate_features(
                 perimeter_px=perimeter,
                 equivalent_diameter_px=equivalent_diameter,
                 equivalent_diameter_mm=float(equivalent_diameter * scale),
+                equivalent_diameter_um=float(equivalent_diameter * scale * 1000.0),
                 major_axis_length_px=major,
                 minor_axis_length_px=minor,
+                major_axis_length_um=float(major * scale * 1000.0),
+                minor_axis_length_um=float(minor * scale * 1000.0),
                 aspect_ratio=float(aspect),
                 eccentricity=float(region.eccentricity),
                 circularity=circularity,

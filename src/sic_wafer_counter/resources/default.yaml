@@ -4,6 +4,17 @@ wafer:
   detection_min_confidence: 0.55
   invalid_regions: []
 
+# Non-gating literature diagnostic. Enable only for review under confirmed
+# comparable 4H-SiC, Cu Kalpha, (008) reflection imaging conditions.
+reference_profile:
+  enabled: false
+  imaging_conditions_confirmed: false
+  name: rigaku_2021_cu_ka_008_tsd_image_feature
+  source_conditions: "4H-SiC; Cu Kalpha; (008) reflection"
+  expected_major_axis_um: 50.0
+  expected_minor_axis_um: 30.0
+  minimum_axis_pixels: 3.0
+
 io:
   preview_max_size: 2000
   tile_size: 2048
@@ -82,6 +93,13 @@ output:
   draw_rejected: true
   generate_html_report: true
   generate_heatmap: true
+  generate_xrt_red_box_overlay: true
+  xrt_overlay_scale_bar_mm: 10.0
+  xrt_overlay_draw_labels: false
+  generate_xrt_detection_detail_montage: true
+  xrt_detection_detail_field_size_mm: 4.0
+  xrt_detection_detail_max_fields: 6
+  xrt_detection_detail_scale_bar_mm: 1.0
   generate_defect_comparison: true
   comparison_max_candidates: 12
   comparison_crop_half_size_px: 48
@@ -89,6 +107,15 @@ output:
   crop_half_size_px: 32
 
 spatial:
+  # The 2-D map reports count / actual valid-mask area in every cell.
+  heatmap_bin_count: 40
+  heatmap_min_valid_fraction: 0.05
+  heatmap_vmin_cm2: 0.0
+  heatmap_vmax_cm2:
+  heatmap_clip_percentile: 99.5
+  heatmap_colormap: turbo
+  heatmap_grid_interval_mm: 10.0
+  heatmap_area_tolerance_fraction: 0.005
   radial_bin_mode: equal_area
   radial_bin_count: 6
   angular_sector_count: 12

@@ -136,7 +136,7 @@ python -m sic_wafer_counter.cli analyze --help
 
 ## 本机展示与分析平台
 
-公开 GitHub Pages 另提供受内存上限保护的[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)：图像字节只写入当前标签页的 Pyodide 文件系统，不上传到服务器；分析在 Web Worker 中调用项目打包的同一个 `sic_wafer_counter.pipeline.analyze_image`，不是 JavaScript 仿制算法。它会生成核心指标、全部候选 CSV、编号叠加图、缺陷识别对照细节图、按真实有效面积归一化的整片密度热图、HTML 报告以及完整 ZIP。
+公开 GitHub Pages 另提供受内存上限保护的[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)：图像字节只写入当前标签页的 Pyodide 文件系统，不上传到服务器；分析在 Web Worker 中调用项目打包的同一个 `sic_wafer_counter.pipeline.analyze_image`，不是 JavaScript 仿制算法。它会生成核心指标、全部候选 CSV、论文语义一致的自动 XRT 候选红框图、明确标为非 DIC/KOH 验证的局部复核图、按真实有效面积归一化的整片密度热图及逐格 CSV、HTML 报告和完整 ZIP。
 
 浏览器模式固定限制为 24 MiB、600 万像素、单边 6000 px，且为控制内存不输出每个候选的独立原始位深裁剪。Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入图像不会发送到该 CDN。超大 TIFF/BigTIFF、完整候选裁剪、无网环境或需要长期保留结果时，请使用下面的本机工作台。关闭或刷新浏览器标签页前应先下载 ZIP，因为浏览器临时文件不会持久保存。
 
@@ -290,6 +290,8 @@ filters:
 
 上述 `*_px` 是兼容旧配置的像素参数。若同一研究要比较不同像素分辨率的图像，可在 YAML 中改用物理参数：`background_kernel_um`、`gaussian_sigma_um`、`blackhat_kernel_sizes_um`、`min_peak_distance_um`、`dog_min_sigma_um`、`dog_max_sigma_um`、`min/max_equivalent_diameter_um`、`min/max_area_um2`、`local_background_ring_um` 和 `min_edge_distance_um`。程序以拟合晶圆的 `um_per_pixel = mm_per_pixel × 1000` 统一换算；物理参数与旧像素参数同时存在时，物理参数优先，并在警告和 `resolved_physical_parameters.yaml` 中记录。形态学核会被转换为正奇数像素。
 
+2021 年 Rigaku 论文在 **4H-SiC、Cu Kalpha、(008) 反射**条件下报告 TSD 图像特征约为 50 µm × 30 µm。项目把它实现为默认关闭、且绝不参与自动接受/拒绝的文献诊断档案；可直接使用完整配置 `config/rigaku_2021_tsd_008.yaml` 查看该尺寸在当前像素尺度下对应多少像素。只有确认成像条件相容后才可把 `imaging_conditions_confirmed` 改为 `true`。若预期短轴少于 3 px，程序会警告形貌采样不足。该尺寸不能跨衍射几何硬编码为通用 TSD 阈值。原文证据与实现边界见 [Rigaku 文献对齐说明](docs/rigaku_2021_alignment.md)。
+
 候选 CSV 同时保存 `distance_to_fitted_circle_mm`（旧的圆拟合距离）与 `distance_to_valid_boundary_mm`。后者来自最终 `valid_analysis_mask` 的欧氏距离变换，因此会计入平边、notch、边缘排除带和无效区域；自动的 `near_wafer_edge` 筛选使用后者。旧列 `distance_to_wafer_edge_mm` 为兼容既有表格而保留，语义等同于拟合圆距离。
 
 预处理不会覆盖原图。中值/高斯滤波只做轻度去噪；大尺度闭运算或高斯背景估计产生 `background`，暗目标响应为 `max(background - image, 0)`。背景核应明显大于典型黑点，过小会削弱目标或制造环状响应。CLAHE 和一维条纹抑制默认关闭，启用后也应通过标注数据验证。
@@ -302,7 +304,7 @@ filters:
 
 候选经过开/闭运算和连通域标记。默认 `otsu_classes: 3` 的多类 Otsu 会把背景、普通暗点和极暗大伪影分开，并使用第一条分界；设为 `2` 可恢复经典二类 Otsu。可选分水岭使用距离变换局部极大值分开粘连点；程序有意让高长宽比、高离心率或低圆度的原始连通区绕过分水岭，避免把划痕、文字沿长度切成许多“点”。报告保留分水岭前后数量，数量突增是需要人工检查的过分割信号。
 
-每个候选至少记录：编号、像素/毫米坐标、径向距离和方位角、面积、周长、等效直径、长短轴、长宽比、离心率、圆度、solidity、边界框、原始灰度、暗响应、局部背景、对比度、距晶圆边缘距离、`accepted` 和 `rejection_reason`。拒绝原因可能包括：
+每个候选至少记录：编号、像素/毫米坐标、径向距离和方位角、面积、周长、等效直径、长短轴（像素及微米）、长宽比、离心率、圆度、solidity、边界框、原始灰度、暗响应、局部背景、对比度、距晶圆边缘距离、`accepted` 和 `rejection_reason`。拒绝原因可能包括：
 
 ```text
 too_small, too_large, too_elongated, low_circularity,
@@ -326,7 +328,7 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 
 真实 SiC 标注验证使用 `scripts/validate_real_annotations.py`；未传入标注时，它只会生成版本化 CSV 模板和 `not validated on real SiC data` 状态，不会伪造真实 precision、recall、F1 或分类不确定度。标注格式、双标注者仲裁、按 `wafer_id` 拆分 calibration/validation/locked test 与不确定度边界见 [真实标注协议](docs/real_annotation_protocol.md)。
 
-空间分布输出使用最终有效掩膜的实际面积，而不是理想圆环面积：`radial_density.csv/png`、`angular_density.csv/png` 和 `regional_density.csv` 分别给出径向、方位角以及 center/middle/edge 的 count、有效面积、密度和泊松区间。默认径向为 `equal_area` 分箱；方位角参考只是图像正 x 轴，未统一晶圆方向时不能解释为晶向。可作为论文 Methods 初稿的操作规则见 [测量协议](docs/measurement_protocol.md)。
+空间分布输出使用最终有效掩膜的实际面积，而不是理想圆环面积。二维热图同样计算 `rho_ij = n_ij / S_valid,ij`，零有效面积格为 NA；边缘低有效面积格可只在显示层隐藏，完整数值仍写入 `density_heatmap_grid.csv`。热图网格总面积和总 count 会与主结果核对，色标、分格和截断状态写入摘要。径向与角向输出包括：`radial_density.csv/png`、`angular_density.csv/png` 和 `regional_density.csv` 分别给出径向、方位角以及 center/middle/edge 的 count、有效面积、密度和泊松区间。默认径向为 `equal_area` 分箱；方位角参考只是图像正 x 轴，未统一晶圆方向时不能解释为晶向。可作为论文 Methods 初稿的操作规则见 [测量协议](docs/measurement_protocol.md)。
 
 ## 输出文件
 
@@ -341,7 +343,9 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `candidate_crops/` | 每个候选的原始位深 `.tif` 局部裁剪及 `.png` 预览，供追溯/复核；候选特别多时会占用可观磁盘空间 |
 | `overlay_accepted.png` | 接受目标的绿色圆圈和编号 |
 | `overlay_all_candidates.png` | 接受目标与被拒绝候选（不同符号） |
-| `defect_comparison_details.png` | 缺陷识别对照细节拼图；抽样并排显示原始局部灰度与自动接受/拒绝标记，不替代完整候选 CSV 或原始裁剪 |
+| `overlay_xrt_red_boxes.png` | 自动接受 XRT 点状候选的红色边界框和物理标尺；没有独立 DIC/KOH 数据时绝不画黄色验证圈 |
+| `xrt_detection_detail_montage.png` | 最高 6 个全分辨率代表性局部视场，按真实候选边界框绘制红框并带物理标尺；明确标注独立参考未提供 |
+| `defect_comparison_details.png` | 原始局部与自动判定复核；使用同一全局科研灰度窗口，明确不是 DIC/KOH 独立验证，不替代完整候选 CSV 或原始裁剪 |
 | `wafer_mask.png` | 分割轮廓优先的完整晶圆区域（拟合圆作为物理标定） |
 | `valid_analysis_mask.png` | 面积计算真正使用的最终有效区 |
 | `preprocessed_preview.png` | 背景校正/暗响应预览 |
@@ -351,7 +355,8 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `run.log` | 加载方式、警告、失败原因、时间和大图限制 |
 | `report.html` | 可在浏览器打开的汇总报告与复核图链接 |
 | `*_histogram.png`、`*_distribution.png` | 可选尺寸、径向、角度和散点统计图 |
-| `density_heatmap.png` | 整片晶圆目标密度热图；每个空间 bin 按 `valid_analysis_mask` 的实际有效面积归一化，单位 cm^-2 |
+| `density_heatmap.png` | 整片晶圆点状目标密度热图；每格按 `valid_analysis_mask` 实际有效面积归一化，单位 cm^-2；显示色标可按配置截断但不改定量表 |
+| `density_heatmap_grid.csv` | 二维网格的 x/y 边界、有效像素数、有效面积比例、count、密度及逐格 Poisson 95% 区间 |
 
 叠加图在超大图上按 `io.max_overlay_size` 缩小显示，但坐标从原图正确映射，CSV 中仍保留原图全局坐标。候选裁剪则从原图对应 tile 读取，不应拿预览图冒充原始分辨率。
 

@@ -1,3 +1,6 @@
+# Full analysis configuration with the Rigaku 2021 morphology diagnostic enabled.
+# Candidate acceptance remains unchanged; the 50 x 30 um dimensions are not a
+# universal TSD threshold and independent DIC/KOH validation is still required.
 wafer:
   diameter_mm: 100.0
   exclude_edge_mm: 0.0
@@ -7,7 +10,7 @@ wafer:
 # Non-gating literature diagnostic. Enable only for review under confirmed
 # comparable 4H-SiC, Cu Kalpha, (008) reflection imaging conditions.
 reference_profile:
-  enabled: false
+  enabled: true
   imaging_conditions_confirmed: false
   name: rigaku_2021_cu_ka_008_tsd_image_feature
   source_conditions: "4H-SiC; Cu Kalpha; (008) reflection"

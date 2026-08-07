@@ -199,6 +199,8 @@ config["output"]["save_candidate_crops"] = False
 config["output"]["save_intermediates"] = True
 config["output"]["generate_html_report"] = True
 config["output"]["generate_defect_comparison"] = True
+config["output"]["generate_xrt_red_box_overlay"] = True
+config["output"]["generate_xrt_detection_detail_montage"] = True
 config["output"]["generate_heatmap"] = True
 config["io"]["max_overlay_size"] = int(options["max_overlay_size_px"])
 

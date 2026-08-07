@@ -15,12 +15,18 @@ const ARTIFACT_LABELS = {
   'radial_density.csv': '径向密度 CSV',
   'angular_density.csv': '方位角密度 CSV',
   'regional_density.csv': '区域密度 CSV',
+  'density_heatmap_grid.csv': '二维密度逐格审计 CSV',
   'run.log': '运行日志',
 };
 
 const IMAGE_LABELS = {
-  'overlay_accepted.png': '接受目标叠加图',
+  'overlay_xrt_red_boxes.png': '自动 XRT 点状候选红框图（无独立验证黄圈）',
+  'xrt_detection_detail_montage.png': '论文风格局部视场（自动红框；独立参考未提供）',
+  'defect_comparison_details.png': '原图与自动判定复核（非 DIC/KOH 验证）',
+  'overlay_accepted.png': '接受目标编号叠加图',
   'overlay_all_candidates.png': '全部候选叠加图',
+  'density_heatmap.png': '实际有效面积归一化密度热图',
+  'defect_size_histogram.png': '目标尺寸分布',
   'valid_analysis_mask.png': '最终有效分析掩膜',
   'wafer_mask.png': '完整晶圆掩膜',
   'preprocessed_preview.png': '暗目标响应预览',
@@ -100,7 +106,8 @@ export function renderLatestRun(detail) {
   const container = document.querySelector('#latest-run');
   const run = detail;
   const s = detail.summary || {};
-  const overlay = detail.artifacts?.['overlay_accepted.png'];
+  const overlay = detail.artifacts?.['overlay_xrt_red_boxes.png']
+    || detail.artifacts?.['overlay_accepted.png'];
   const preview = overlay
     ? `<a class="latest-preview" href="#run/${encodeURIComponent(run.run_id)}"><img src="${escapeHtml(overlay)}" alt="${escapeHtml(run.input_file_name)} 的接受目标叠加图" width="640" height="480" decoding="async" fetchpriority="high"></a>`
     : '<div class="latest-preview"><span class="status-badge neutral">没有叠加图</span></div>';
@@ -233,7 +240,10 @@ export function renderRunDetail(detail) {
   const select = document.querySelector('#image-artifact');
   const imageOptions = Object.entries(IMAGE_LABELS).filter(([name]) => artifacts[name]);
   select.innerHTML = imageOptions.map(([name, label]) => `<option value="${escapeHtml(name)}">${escapeHtml(label)}</option>`).join('');
-  const preferred = imageOptions.find(([name]) => name === 'overlay_accepted.png') || imageOptions[0];
+  const preferred = imageOptions.find(([name]) => name === 'xrt_detection_detail_montage.png')
+    || imageOptions.find(([name]) => name === 'overlay_xrt_red_boxes.png')
+    || imageOptions.find(([name]) => name === 'overlay_accepted.png')
+    || imageOptions[0];
   select.disabled = imageOptions.length < 2;
   if (preferred) select.value = preferred[0];
   updateResultImage(detail, select.value);

@@ -10,9 +10,11 @@ import pytest
 from sic_wafer_counter.density import calculate_density
 from sic_wafer_counter.visualization import (
     calculate_angular_density,
+    calculate_density_grid,
     calculate_radial_density,
     calculate_regional_density,
     save_area_normalized_distributions,
+    save_density_heatmap,
 )
 
 
@@ -103,3 +105,51 @@ def test_regional_density_and_output_artifacts(tmp_path) -> None:
     )
     for path in paths.values():
         assert path.is_file()
+
+
+
+def test_density_grid_conserves_count_and_actual_mask_area(tmp_path) -> None:
+    valid, frame, center, mm_per_pixel, radius_mm = _mask_and_points(seed=41)
+    grid = calculate_density_grid(
+        frame,
+        valid_mask=valid,
+        center_px=center,
+        mm_per_pixel=mm_per_pixel,
+        wafer_radius_mm=radius_mm,
+        bins=10,
+    )
+    expected_area = valid.sum() * (mm_per_pixel / 10.0) ** 2
+    assert int(grid["count"].sum()) == len(frame)
+    assert grid["valid_area_cm2"].sum() == pytest.approx(expected_area)
+    populated = grid[grid["valid_area_cm2"] > 0].copy()
+    assert np.allclose(
+        populated["density_cm2"],
+        populated["count"] / populated["valid_area_cm2"],
+    )
+    assert grid.loc[grid["valid_area_cm2"] == 0, "density_cm2"].isna().all()
+    assert (grid["valid_area_fraction"].between(0.0, 1.0)).all()
+
+    image_path = tmp_path / "density_heatmap.png"
+    table_path = tmp_path / "density_heatmap_grid.csv"
+    save_density_heatmap(
+        frame,
+        image_path,
+        valid_mask=valid,
+        center_px=center,
+        mm_per_pixel=mm_per_pixel,
+        wafer_radius_mm=radius_mm,
+        bins=10,
+        vmax_cm2=1200.0,
+        min_valid_fraction=0.1,
+        grid_csv_path=table_path,
+    )
+    assert image_path.is_file() and table_path.is_file()
+    saved = pd.read_csv(table_path)
+    assert saved["valid_area_cm2"].sum() == pytest.approx(expected_area)
+    assert int(saved["count"].sum()) == len(frame)
+
+
+def test_density_heatmap_refuses_count_only_fallback(tmp_path) -> None:
+    frame = pd.DataFrame({"accepted": [True], "x_mm": [0.0], "y_mm": [0.0]})
+    with pytest.raises(TypeError):
+        save_density_heatmap(frame, tmp_path / "not_density.png")  # type: ignore[call-arg]

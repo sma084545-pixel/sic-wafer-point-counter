@@ -53,9 +53,28 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             assert job["status"] == "completed", job.get("error")
             assert job["summary"]["accepted_count"] == 96
             assert job["summary"]["density_unit"] == "cm^-2"
-            artifact = client.get(job["artifacts"]["overlay_accepted.png"])
-            assert artifact.status_code == 200
-            assert artifact.mimetype == "image/png"
+            required_artifacts = {
+                "overlay_accepted.png",
+                "overlay_xrt_red_boxes.png",
+                "xrt_detection_detail_montage.png",
+                "defect_comparison_details.png",
+                "defect_size_histogram.png",
+                "density_heatmap.png",
+                "density_heatmap_grid.csv",
+            }
+            assert required_artifacts <= set(job["artifacts"])
+            for name in (
+                "overlay_xrt_red_boxes.png",
+                "xrt_detection_detail_montage.png",
+                "defect_comparison_details.png",
+                "density_heatmap.png",
+            ):
+                artifact = client.get(job["artifacts"][name])
+                assert artifact.status_code == 200
+                assert artifact.mimetype == "image/png"
+            grid = client.get(job["artifacts"]["density_heatmap_grid.csv"])
+            assert grid.status_code == 200
+            assert grid.mimetype == "text/csv"
             assert client.get(f"/api/jobs/{job['job_id']}/files/../../README.md").status_code == 404
     finally:
         manager.shutdown()

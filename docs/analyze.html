@@ -3,13 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="description" content="在浏览器本地运行 SiC 晶圆 XRT 点状目标科研分析，预览缺陷对照细节、整片密度热图和完整 HTML 报告。">
+  <meta name="description" content="在浏览器本地运行 SiC 晶圆 XRT 点状目标科研分析，预览自动红框局部视场、缺陷对照细节、整片密度热图和完整 HTML 报告。">
   <meta name="theme-color" content="#f4f7f6">
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>浏览器分析｜SiC 晶圆点状目标平台</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="assets/analyze.css?v=20260807a">
-  <script type="module" src="assets/analyze.js?v=20260807a"></script>
+  <script type="module" src="assets/analyze.js?v=20260808a"></script>
 </head>
 <body>
   <a class="skip-link" href="#content">跳到主要内容</a>
@@ -99,7 +99,7 @@
           <li>载入科学计算运行时和项目代码</li>
           <li>晶圆识别、预处理、候选分割与筛选</li>
           <li>计算有效面积、密度和计数区间</li>
-          <li>生成缺陷对照图、整片缺陷密度热图与报告</li>
+          <li>生成论文风格局部视场（独立参考未提供）、缺陷对照图、整片缺陷密度热图与报告</li>
         </ol>
         <p class="runtime-note">首次运行需从 jsDelivr 下载 Pyodide 与科学计算包，之后浏览器通常可复用缓存。运算期间页面仍可响应；可随时取消。</p>
       </aside>
@@ -121,7 +121,7 @@
       <div class="warning-list" id="warning-list"></div>
 
       <section class="artifact-card" aria-labelledby="visual-title">
-        <div class="artifact-heading"><div><h3 id="visual-title">质量复核与空间分布</h3><p>优先检查缺陷识别对照细节和按实际有效面积归一化的整片缺陷密度热图。</p></div></div>
+        <div class="artifact-heading"><div><h3 id="visual-title">质量复核与空间分布</h3><p>优先检查论文风格局部视场（红框为自动接受候选；独立参考未提供）、自动 XRT 点状候选红框图、原图与自动判定复核（非 DIC/KOH 验证），以及按实际有效面积归一化的整片密度热图。</p></div></div>
         <div class="preview-tabs" id="preview-tabs" role="tablist" aria-label="结果图选择"></div>
         <figure class="preview-stage">
           <img id="artifact-preview" alt="分析输出预览">

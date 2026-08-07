@@ -2,8 +2,8 @@
   "runtime_schema_version": 1,
   "pyodide_version": "314.0.4",
   "package_wheel": {
-    "file": "sic_wafer_point_counter-0.1.0-py3-none-any.whl",
-    "sha256": "0c6df629b570d361c56e2a96ccb4a7b9b1afc827268d374b31d34a11f308657c"
+    "file": "sic_wafer_point_counter-0.2.0-py3-none-any.whl",
+    "sha256": "7e9bd7baebfa01255ecaa679ed33c346323eacca6ec4a4dcb97aca8b7bb3484d"
   },
   "tifffile_wheel": {
     "file": "tifffile-2025.5.10-py3-none-any.whl",
@@ -15,5 +15,5 @@
     "max_dimension_px": 6000,
     "max_overlay_size_px": 2000
   },
-  "scientific_runtime": "same analyze_image pipeline; detail comparison and area-normalized density heatmap enabled; per-candidate crops disabled in browser"
+  "scientific_runtime": "same analyze_image pipeline; full-resolution 4 mm automatic red-box detail fields (independent reference not provided), red-box overview, and actual-mask area-normalized density heatmap/grid enabled; per-candidate crops disabled in browser"
 }

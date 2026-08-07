@@ -13,7 +13,9 @@ const results = document.querySelector("#results");
 const bundleDownload = document.querySelector("#bundle-download");
 
 const imageLabels = {
-  "defect_comparison_details.png": "缺陷识别对照细节",
+  "xrt_detection_detail_montage.png": "论文风格局部视场（自动红框；独立参考未提供）",
+  "overlay_xrt_red_boxes.png": "自动 XRT 点状候选红框图（无独立验证黄圈）",
+  "defect_comparison_details.png": "原图与自动判定复核（非 DIC/KOH 验证）",
   "density_heatmap.png": "整片缺陷密度热图",
   "overlay_accepted.png": "接受目标编号叠加",
   "overlay_all_candidates.png": "全部候选叠加",

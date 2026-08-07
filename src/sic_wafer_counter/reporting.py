@@ -33,6 +33,7 @@ from .visualization import (
     save_distribution_plots,
     save_grayscale_image,
     save_overlays,
+    save_xrt_detection_overlay,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -50,6 +51,10 @@ UNCERTAINTY_NOTE_ZH = (
     "该统计不确定度只反映有限计数造成的随机误差，不包含图像分割、漏检、误检以及物理判定错误"
     "造成的系统误差。"
 )
+PAPER_ALIGNMENT_NOTE_ZH = (
+    "论文式红色矩形仅表示程序自动接受的 XRT 点状候选。黄色圆圈在原论文中表示独立 DIC 坑位；"
+    "本分析没有导入、配准并核验独立 DIC/KOH 数据，因此不会生成黄色验证圈，也不能声称完成 TSD 物理验证。"
+)
 
 DEFECT_COLUMNS: tuple[str, ...] = (
     "defect_id",
@@ -64,8 +69,11 @@ DEFECT_COLUMNS: tuple[str, ...] = (
     "perimeter_px",
     "equivalent_diameter_px",
     "equivalent_diameter_mm",
+    "equivalent_diameter_um",
     "major_axis_length_px",
     "minor_axis_length_px",
+    "major_axis_length_um",
+    "minor_axis_length_um",
     "aspect_ratio",
     "eccentricity",
     "circularity",
@@ -581,7 +589,18 @@ def save_defect_comparison_details(
                 raw_crop = np.asarray(original_image)[y0:y1, x0:x1]  # type: ignore[index]
             if raw_crop.size == 0:
                 continue
-            display = normalize_for_display(raw_crop, 0.5, 99.5)
+            crop_values = np.asarray(raw_crop)
+            if (
+                np.issubdtype(crop_values.dtype, np.floating)
+                and np.isfinite(crop_values).all()
+                and float(np.min(crop_values)) >= 0.0
+                and float(np.max(crop_values)) <= 1.0
+            ):
+                # The pipeline supplies globally normalized float32 crops here,
+                # preserving WhiteIsZero direction and between-candidate contrast.
+                display = np.rint(crop_values.astype(np.float32) * 255.0).astype(np.uint8)
+            else:
+                display = normalize_for_display(crop_values, 0.5, 99.5)
             display = cv2.resize(display, (tile_size, tile_size), interpolation=cv2.INTER_NEAREST)
             raw_bgr = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
             marked = raw_bgr.copy()
@@ -630,6 +649,276 @@ def save_defect_comparison_details(
 
     if not cv2.imwrite(str(destination), canvas):
         raise OSError(f"Could not write defect comparison montage: {destination}")
+    return destination
+
+
+def _true_candidate_bbox(record: Mapping[str, Any]) -> tuple[float, float, float, float] | None:
+    """Parse the segmentation bounding box without inventing a display-sized box."""
+
+    raw = record.get("bounding_box")
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return None
+    if not isinstance(raw, (list, tuple)) or len(raw) != 4:
+        return None
+    try:
+        x0, y0, x1, y1 = (float(value) for value in raw)
+    except (TypeError, ValueError):
+        return None
+    if not all(np.isfinite((x0, y0, x1, y1))) or x1 <= x0 or y1 <= y0:
+        return None
+    return x0, y0, x1, y1
+
+
+def _globally_normalized_crop_to_uint8(crop: np.ndarray) -> np.ndarray:
+    """Convert one globally normalized scientific crop without local restretching."""
+
+    values = np.asarray(crop)
+    if values.ndim != 2 or values.size == 0:
+        raise ValueError(f"Expected a non-empty 2-D grayscale field, got {values.shape}")
+    if not np.issubdtype(values.dtype, np.floating):
+        raise ValueError(
+            "XRT detail crop_reader must return global-normalized scientific float [0, 1]"
+        )
+    if not np.isfinite(values).all():
+        raise ValueError("XRT detail crop_reader returned non-finite values")
+    minimum = float(values.min())
+    maximum = float(values.max())
+    if minimum < -1e-6 or maximum > 1.0 + 1e-6:
+        raise ValueError(
+            "XRT detail crop_reader did not use the global scientific normalization window"
+        )
+    return np.rint(np.clip(values, 0.0, 1.0).astype(np.float32) * 255.0).astype(np.uint8)
+
+
+def _representative_candidate_indices(frame: pd.DataFrame, limit: int) -> list[int]:
+    """Select deterministic, spatially spread accepted-candidate anchors."""
+
+    if frame.empty or limit <= 0:
+        return []
+    x_values = pd.to_numeric(frame["centroid_x_px"], errors="coerce").to_numpy(dtype=float)
+    y_values = pd.to_numeric(frame["centroid_y_px"], errors="coerce").to_numpy(dtype=float)
+    coordinates = np.column_stack((x_values, y_values))
+    if not np.isfinite(coordinates).all():
+        raise ValueError("Accepted candidates require finite centroid coordinates for detail fields")
+
+    # Start near the robust spatial middle, then spread subsequent fields by a
+    # deterministic farthest-point rule. Stable input ordering resolves ties.
+    median = np.median(coordinates, axis=0)
+    first = int(np.argmin(np.sum((coordinates - median) ** 2, axis=1)))
+    selected = [first]
+    nearest_distance = np.sum((coordinates - coordinates[first]) ** 2, axis=1)
+    while len(selected) < min(limit, len(frame)):
+        nearest_distance[np.asarray(selected, dtype=int)] = -1.0
+        next_index = int(np.argmax(nearest_distance))
+        selected.append(next_index)
+        candidate_distance = np.sum((coordinates - coordinates[next_index]) ** 2, axis=1)
+        nearest_distance = np.minimum(nearest_distance, candidate_distance)
+    return selected
+
+
+def save_xrt_detection_detail_montage(
+    original_image: np.ndarray | None,
+    defects: pd.DataFrame,
+    output_path: str | Path,
+    *,
+    mm_per_pixel: float,
+    field_size_mm: float = 4.0,
+    max_fields: int = 6,
+    scale_bar_mm: float = 1.0,
+    source_shape: tuple[int, int] | None = None,
+    crop_reader: Callable[[int, int, int, int], np.ndarray] | None = None,
+) -> Path:
+    """Save full-resolution local XRT fields with automatic red boxes.
+
+    ``crop_reader`` must return scientific floating-point values using the image
+    source's single global normalization
+    window. Every accepted candidate whose true segmentation ``bounding_box``
+    intersects a selected field is drawn as a red rectangle. No independent
+    reference marks are drawn; the figure explicitly states that an independent
+    reference was not provided. This artifact reviews image-rule output only and
+    never changes candidate acceptance or density.
+    """
+
+    if not np.isfinite(mm_per_pixel) or mm_per_pixel <= 0:
+        raise ValueError("mm_per_pixel must be finite and positive")
+    if not np.isfinite(field_size_mm) or field_size_mm <= 0:
+        raise ValueError("field_size_mm must be finite and positive")
+    if not isinstance(max_fields, int) or not 1 <= max_fields <= 6:
+        raise ValueError("max_fields must be an integer from 1 to 6")
+    if not np.isfinite(scale_bar_mm) or scale_bar_mm <= 0 or scale_bar_mm >= field_size_mm:
+        raise ValueError("scale_bar_mm must be positive and smaller than field_size_mm")
+    if crop_reader is None and original_image is None:
+        raise ValueError("A global-normalized crop_reader or full scientific image is required")
+
+    if source_shape is not None:
+        source_height, source_width = map(int, source_shape[:2])
+    elif original_image is not None:
+        source_height, source_width = np.asarray(original_image).shape[:2]
+    else:
+        raise ValueError("source_shape is required for crop_reader-only detail fields")
+    if source_height <= 0 or source_width <= 0:
+        raise ValueError(f"Invalid source_shape: {(source_height, source_width)}")
+    if crop_reader is None and original_image is not None:
+        actual_shape = tuple(np.asarray(original_image).shape[:2])
+        if actual_shape != (source_height, source_width):
+            raise ValueError("Full-resolution crop_reader is required when original_image is a preview")
+
+    frame = defects_to_frame(defects)
+    accepted = frame.loc[frame["accepted"].map(_truthy)].copy()
+    accepted["_x"] = pd.to_numeric(accepted["centroid_x_px"], errors="coerce")
+    accepted["_y"] = pd.to_numeric(accepted["centroid_y_px"], errors="coerce")
+    accepted["_id_numeric"] = pd.to_numeric(accepted.get("defect_id"), errors="coerce")
+    accepted["_id_text"] = accepted.get(
+        "defect_id", pd.Series(index=accepted.index, dtype=object)
+    ).astype(str)
+    accepted = accepted.sort_values(
+        ["_id_numeric", "_id_text", "_y", "_x"], kind="stable", na_position="last"
+    ).reset_index(drop=True)
+
+    bboxes: list[tuple[float, float, float, float]] = []
+    for _, record in accepted.iterrows():
+        bbox = _true_candidate_bbox(record)
+        if bbox is None:
+            raise ValueError(
+                f"Accepted candidate {record.get('defect_id', '?')} has no valid true bounding_box"
+            )
+        bboxes.append(bbox)
+
+    field_size_px = max(1, int(round(float(field_size_mm) / float(mm_per_pixel))))
+    field_width_px = min(field_size_px, source_width)
+    field_height_px = min(field_size_px, source_height)
+
+    def field_bounds(x: float, y: float) -> tuple[int, int, int, int]:
+        x0 = max(0, min(source_width - field_width_px, int(round(x - field_width_px / 2.0))))
+        y0 = max(0, min(source_height - field_height_px, int(round(y - field_height_px / 2.0))))
+        return x0, y0, x0 + field_width_px, y0 + field_height_px
+
+    selected_fields: list[tuple[int, int, int, int]] = []
+    for index in _representative_candidate_indices(accepted, max_fields):
+        bounds = field_bounds(float(accepted.iloc[index]["_x"]), float(accepted.iloc[index]["_y"]))
+        if bounds not in selected_fields:
+            selected_fields.append(bounds)
+
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    tile_size = 420
+    card_footer = 42
+    card_gap = 12
+    header_height = 82
+    columns = min(3, max(1, len(selected_fields)))
+    rows = max(1, int(math.ceil(max(1, len(selected_fields)) / columns)))
+    card_width = tile_size
+    card_height = tile_size + card_footer
+    canvas_width = columns * card_width + (columns + 1) * card_gap
+    canvas_height = header_height + rows * card_height + (rows + 1) * card_gap
+    canvas = np.full((canvas_height, canvas_width, 3), 248, dtype=np.uint8)
+    cv2.putText(
+        canvas,
+        "XRT automatic point-target detection fields",
+        (18, 31),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.78,
+        (27, 35, 40),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "Red boxes = automatically accepted image candidates | Independent reference: NOT PROVIDED",
+        (18, 59),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.47,
+        (58, 68, 73),
+        1,
+        cv2.LINE_AA,
+    )
+
+    if not selected_fields:
+        cv2.putText(
+            canvas,
+            "No automatically accepted candidates were available for field selection.",
+            (18, header_height + 52),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.56,
+            (70, 78, 82),
+            1,
+            cv2.LINE_AA,
+        )
+    else:
+        for field_number, (x0, y0, x1, y1) in enumerate(selected_fields, start=1):
+            if crop_reader is not None:
+                crop = np.asarray(crop_reader(x0, y0, x1, y1))
+            else:
+                crop = np.asarray(original_image)[y0:y1, x0:x1]  # type: ignore[index]
+            display = _globally_normalized_crop_to_uint8(crop)
+            interpolation = cv2.INTER_AREA if max(display.shape) > tile_size else cv2.INTER_LINEAR
+            tile = cv2.resize(display, (tile_size, tile_size), interpolation=interpolation)
+            tile_bgr = cv2.cvtColor(tile, cv2.COLOR_GRAY2BGR)
+            scale_x = tile_size / float(x1 - x0)
+            scale_y = tile_size / float(y1 - y0)
+
+            field_box_count = 0
+            for record_number in range(len(accepted)):
+                bx0, by0, bx1, by1 = bboxes[record_number]
+                if bx1 <= x0 or bx0 >= x1 or by1 <= y0 or by0 >= y1:
+                    continue
+                left = int(round((max(bx0, x0) - x0) * scale_x))
+                top = int(round((max(by0, y0) - y0) * scale_y))
+                right = int(round((min(bx1, x1) - x0) * scale_x)) - 1
+                bottom = int(round((min(by1, y1) - y0) * scale_y)) - 1
+                left, right = np.clip((left, right), 0, tile_size - 1).astype(int)
+                top, bottom = np.clip((top, bottom), 0, tile_size - 1).astype(int)
+                if right >= left and bottom >= top:
+                    cv2.rectangle(tile_bgr, (left, top), (right, bottom), (0, 0, 255), 2, cv2.LINE_AA)
+                    field_box_count += 1
+
+            bar_length = max(1, int(round((float(scale_bar_mm) / float(mm_per_pixel)) * scale_x)))
+            bar_length = min(bar_length, tile_size - 48)
+            bar_x1 = tile_size - 18
+            bar_x0 = bar_x1 - bar_length
+            bar_y = tile_size - 24
+            cv2.line(tile_bgr, (bar_x0, bar_y), (bar_x1, bar_y), (0, 0, 0), 7, cv2.LINE_AA)
+            scale_label = f"{float(scale_bar_mm):g} mm"
+            (label_width, _), _ = cv2.getTextSize(
+                scale_label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1
+            )
+            label_origin = (bar_x1 - label_width, bar_y - 10)
+            cv2.putText(
+                tile_bgr, scale_label, label_origin, cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, (255, 255, 255), 3, cv2.LINE_AA,
+            )
+            cv2.putText(
+                tile_bgr, scale_label, label_origin, cv2.FONT_HERSHEY_SIMPLEX,
+                0.5, (0, 0, 0), 1, cv2.LINE_AA,
+            )
+
+            row, column = divmod(field_number - 1, columns)
+            left = card_gap + column * (card_width + card_gap)
+            top = header_height + card_gap + row * (card_height + card_gap)
+            canvas[top:top + tile_size, left:left + tile_size] = tile_bgr
+            actual_width_mm = (x1 - x0) * float(mm_per_pixel)
+            actual_height_mm = (y1 - y0) * float(mm_per_pixel)
+            footer = (
+                f"Field {field_number:02d} | {actual_width_mm:.3g} x {actual_height_mm:.3g} mm"
+                f" | automatic boxes: {field_box_count}"
+            )
+            cv2.putText(
+                canvas, footer, (left + 5, top + tile_size + 27), cv2.FONT_HERSHEY_SIMPLEX,
+                0.43, (45, 53, 57), 1, cv2.LINE_AA,
+            )
+            cv2.rectangle(
+                canvas,
+                (left - 1, top - 1),
+                (left + card_width, top + card_height - 1),
+                (208, 216, 218),
+                1,
+            )
+
+    if not cv2.imwrite(str(destination), canvas):
+        raise OSError(f"Could not write XRT detection detail montage: {destination}")
     return destination
 
 
@@ -703,10 +992,11 @@ _REPORT_TEMPLATE = r"""<!doctype html>
     <li><a href="radial_density.csv">径向密度（有效面积归一化）</a></li>
     <li><a href="angular_density.csv">方位角密度（有效面积归一化）</a></li>
     <li><a href="regional_density.csv">中心/中间/边缘密度</a></li>
+    {% if density_heatmap_grid_available %}<li><a href="density_heatmap_grid.csv">整片二维密度逐格数据（数量、实际有效面积、密度与泊松区间）</a></li>{% endif %}
     <li><a href="summary.json">完整机器可读摘要</a></li>
   </ul>
   <h2>科学解释边界</h2>
-  <p class="caveat">{{ scientific_limit }}<br><br>{{ uncertainty_note }}</p>
+  <p class="caveat">{{ scientific_limit }}<br><br>{{ paper_alignment_note }}<br><br>{{ uncertainty_note }}</p>
   <h2>空间分布解释限制</h2>
   <p class="caveat">{{ spatial_limit }}</p>
   <h2>全部摘要字段</h2>
@@ -814,7 +1104,9 @@ def generate_html_report(
     default_images = {
         "overlay_accepted.png": "自动接受目标（绿色圆圈和编号）",
         "overlay_all_candidates.png": "全部候选（接受：绿色；拒绝：红色叉）",
-        "defect_comparison_details.png": "缺陷识别对照细节（原始局部与自动判定并排）",
+        "overlay_xrt_red_boxes.png": "论文语义对齐的自动 XRT 点状候选红框图（无独立 DIC/KOH 黄圈）",
+        "xrt_detection_detail_montage.png": "论文风格局部视场：红框为自动接受点状候选；独立参考未提供",
+        "defect_comparison_details.png": "原始局部与自动判定复核（非 DIC/KOH 独立验证）",
         "wafer_mask.png": "完整晶圆掩膜",
         "valid_analysis_mask.png": "最终有效分析掩膜",
         "preprocessed_preview.png": "预处理响应预览",
@@ -825,7 +1117,7 @@ def generate_html_report(
         "radial_density.png": "径向密度（实际有效面积归一化）",
         "angular_density.png": "方位角密度（图像正 x 轴参考）",
         "wafer_position_scatter.png": "二维位置分布",
-        "density_heatmap.png": "分区密度/计数热图",
+        "density_heatmap.png": "按最终有效掩膜逐格面积归一化的点状目标密度（cm^-2）",
     }
     images: list[tuple[str, str]] = []
     if image_files:
@@ -846,12 +1138,14 @@ def generate_html_report(
         warnings=_summary_value(summary, "warnings", default=[]),
         images=images,
         scientific_limit=SCIENTIFIC_LIMITATION_ZH,
+        paper_alignment_note=PAPER_ALIGNMENT_NOTE_ZH,
         uncertainty_note=UNCERTAINTY_NOTE_ZH,
         spatial_limit=SPATIAL_INTERPRETATION_LIMIT_ZH,
         flat_summary=flat,
         software_version=_summary_value(summary, "software_version", default=__version__),
         generated_at=_summary_value(summary, "generated_at_utc", default=""),
         candidate_crops_available=(folder / "candidate_crops").is_dir(),
+        density_heatmap_grid_available=(folder / "density_heatmap_grid.csv").is_file(),
     )
     path = folder / "report.html"
     path.write_text(report, encoding="utf-8")
@@ -873,6 +1167,7 @@ def write_analysis_outputs(
     logger_messages: Iterable[str] | None = None,
     source_shape: tuple[int, int] | None = None,
     crop_reader: Callable[[int, int, int, int], np.ndarray] | None = None,
+    comparison_crop_reader: Callable[[int, int, int, int], np.ndarray] | None = None,
 ) -> dict[str, Path]:
     """Write the complete required output bundle for one analysis run.
 
@@ -939,6 +1234,35 @@ def write_analysis_outputs(
                 source_shape=source_shape,
             )
         )
+        scale_value = _summary_value(canonical, "mm_per_pixel", "wafer.mm_per_pixel")
+        if bool(output_config.get("generate_xrt_red_box_overlay", True)):
+            outputs["overlay_xrt_red_boxes"] = save_xrt_detection_overlay(
+                original_image,
+                frame,
+                folder / "overlay_xrt_red_boxes.png",
+                max_size=max_size,
+                source_shape=source_shape,
+                mm_per_pixel=float(scale_value),
+                scale_bar_mm=float(output_config.get("xrt_overlay_scale_bar_mm", 10.0)),
+                draw_labels=bool(output_config.get("xrt_overlay_draw_labels", False)),
+                independent_reference_points=None,
+            )
+        if bool(output_config.get("generate_xrt_detection_detail_montage", True)):
+            outputs["xrt_detection_detail_montage"] = save_xrt_detection_detail_montage(
+                original_image,
+                frame,
+                folder / "xrt_detection_detail_montage.png",
+                mm_per_pixel=float(scale_value),
+                field_size_mm=float(
+                    output_config.get("xrt_detection_detail_field_size_mm", 4.0)
+                ),
+                max_fields=int(output_config.get("xrt_detection_detail_max_fields", 6)),
+                scale_bar_mm=float(
+                    output_config.get("xrt_detection_detail_scale_bar_mm", 1.0)
+                ),
+                source_shape=source_shape,
+                crop_reader=comparison_crop_reader,
+            )
         if bool(output_config.get("generate_defect_comparison", True)):
             outputs["defect_comparison_details"] = save_defect_comparison_details(
                 original_image,
@@ -947,7 +1271,7 @@ def write_analysis_outputs(
                 half_size_px=int(output_config.get("comparison_crop_half_size_px", 48)),
                 max_candidates=int(output_config.get("comparison_max_candidates", 12)),
                 source_shape=source_shape,
-                crop_reader=crop_reader,
+                crop_reader=comparison_crop_reader or crop_reader,
             )
     if full_wafer_mask is not None:
         outputs["wafer_mask"] = save_binary_mask(full_wafer_mask, folder / "wafer_mask.png", max_size=max_size)
@@ -1011,6 +1335,20 @@ def write_analysis_outputs(
             source_width,
             source_height,
         )
+    spatial_config = config.get("spatial", {})
+    if not isinstance(spatial_config, Mapping):
+        raise ValueError("spatial configuration must be a mapping")
+    heatmap_requested = bool(output_config.get("generate_heatmap", True))
+    heatmap_ready = (
+        valid_analysis_mask is not None
+        and plot_center is not None
+        and plot_mm_per_pixel is not None
+    )
+    if heatmap_requested and not heatmap_ready:
+        LOGGER.warning(
+            "Density heatmap skipped: final valid mask and physical calibration are required; "
+            "a count-only plot is not substituted"
+        )
     outputs.update(
         save_distribution_plots(
             frame,
@@ -1019,17 +1357,21 @@ def write_analysis_outputs(
             center_px=plot_center,
             mm_per_pixel=plot_mm_per_pixel,
             wafer_radius_mm=diameter_mm / 2.0,
-            generate_heatmap=bool(output_config.get("generate_heatmap", True)),
+            generate_heatmap=heatmap_requested and heatmap_ready,
+            heatmap_bins=int(spatial_config.get("heatmap_bin_count", 40)),
+            heatmap_colormap=str(spatial_config.get("heatmap_colormap", "turbo")),
+            heatmap_vmin_cm2=spatial_config.get("heatmap_vmin_cm2", 0.0),
+            heatmap_vmax_cm2=spatial_config.get("heatmap_vmax_cm2"),
+            heatmap_clip_percentile=float(spatial_config.get("heatmap_clip_percentile", 99.5)),
+            heatmap_min_valid_fraction=float(
+                spatial_config.get("heatmap_min_valid_fraction", 0.05)
+            ),
+            heatmap_grid_interval_mm=float(
+                spatial_config.get("heatmap_grid_interval_mm", 10.0)
+            ),
         )
     )
-    if (
-        valid_analysis_mask is not None
-        and plot_center is not None
-        and plot_mm_per_pixel is not None
-    ):
-        spatial_config = config.get("spatial", {})
-        if not isinstance(spatial_config, Mapping):
-            raise ValueError("spatial configuration must be a mapping")
+    if heatmap_ready:
         spatial_outputs, spatial_tables = save_area_normalized_distributions(
             frame,
             folder,
@@ -1043,9 +1385,81 @@ def write_analysis_outputs(
             regions=spatial_config.get("regions"),
         )
         outputs.update(spatial_outputs)
+        heatmap_summary: dict[str, Any] = {
+            "status": "not generated",
+            "normalization": "count / actual valid_analysis_mask area in each cell",
+        }
+        grid_path = outputs.get("density_heatmap_grid")
+        if grid_path is not None and Path(grid_path).is_file():
+            grid_frame = pd.read_csv(grid_path)
+            heatmap_area = float(grid_frame["valid_area_cm2"].sum())
+            heatmap_count = int(grid_frame["count"].sum())
+            expected_area = float(
+                _summary_value(canonical, "valid_analysis_area_cm2", default=heatmap_area)
+            )
+            area_relative_error = (
+                abs(heatmap_area - expected_area) / expected_area if expected_area > 0 else 0.0
+            )
+            finite_density = pd.to_numeric(grid_frame["density_cm2"], errors="coerce")
+            display_rows = grid_frame["valid_area_fraction"] >= float(
+                spatial_config.get("heatmap_min_valid_fraction", 0.05)
+            )
+            display_density = finite_density[display_rows].dropna()
+            configured_vmax = spatial_config.get("heatmap_vmax_cm2")
+            displayed_vmax = (
+                float(configured_vmax)
+                if configured_vmax is not None
+                else (
+                    float(
+                        np.percentile(
+                            display_density,
+                            float(spatial_config.get("heatmap_clip_percentile", 99.5)),
+                        )
+                    )
+                    if not display_density.empty
+                    else None
+                )
+            )
+            heatmap_summary = {
+                "status": "generated",
+                "normalization": "count / actual valid_analysis_mask area in each cell",
+                "bin_count_per_axis": int(spatial_config.get("heatmap_bin_count", 40)),
+                "cell_size_mm": float(grid_frame.iloc[0]["x_right_mm"] - grid_frame.iloc[0]["x_left_mm"]),
+                "valid_area_cm2": heatmap_area,
+                "valid_area_relative_error_vs_primary": area_relative_error,
+                "count": heatmap_count,
+                "count_matches_accepted_n": heatmap_count
+                == int(_summary_value(canonical, "accepted_count", default=heatmap_count)),
+                "minimum_display_valid_fraction": float(
+                    spatial_config.get("heatmap_min_valid_fraction", 0.05)
+                ),
+                "colormap": str(spatial_config.get("heatmap_colormap", "turbo")),
+                "display_vmin_cm2": spatial_config.get("heatmap_vmin_cm2", 0.0),
+                "display_vmax_cm2": displayed_vmax,
+                "display_scale_clipped": bool(
+                    displayed_vmax is not None
+                    and not display_density.empty
+                    and float(display_density.max()) > displayed_vmax
+                ),
+                "quantitative_grid_file": Path(grid_path).name,
+            }
+            tolerance = float(spatial_config.get("heatmap_area_tolerance_fraction", 0.005))
+            if area_relative_error > tolerance:
+                warning = (
+                    "Density heatmap grid area differs from the primary valid analysis area "
+                    f"by {area_relative_error:.3%}; inspect preview-mask geometry before interpretation"
+                )
+                LOGGER.warning(warning)
+                warning_list = list(canonical.get("warnings", []))
+                if warning not in warning_list:
+                    warning_list.append(warning)
+                canonical["warnings"] = warning_list
+                if isinstance(summary, dict):
+                    summary["warnings"] = warning_list
         spatial_summary = {
             "radial_bin_mode": str(spatial_config.get("radial_bin_mode", "equal_area")),
             "angle_reference": "image_positive_x",
+            "density_heatmap": heatmap_summary,
             "regional_density": _json_safe(
                 spatial_tables["regional"].to_dict(orient="records")
             ),

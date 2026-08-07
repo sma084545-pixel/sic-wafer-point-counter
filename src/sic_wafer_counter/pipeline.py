@@ -84,6 +84,69 @@ class _DetectionBundle:
     warnings: list[str]
 
 
+def _reference_profile_report(
+    config: Mapping[str, Any],
+    *,
+    um_per_pixel: float,
+) -> tuple[dict[str, Any], list[str]]:
+    """Resolve the paper morphology profile as a non-gating diagnostic."""
+
+    raw = config.get("reference_profile", {})
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, Mapping):
+        raise ValueError("reference_profile configuration must be a mapping")
+    enabled = bool(raw.get("enabled", False))
+    major_um = float(raw.get("expected_major_axis_um", 50.0))
+    minor_um = float(raw.get("expected_minor_axis_um", 30.0))
+    minimum_pixels = float(raw.get("minimum_axis_pixels", 3.0))
+    if not all(np.isfinite((major_um, minor_um, minimum_pixels))):
+        raise ValueError("reference-profile sizes must be finite")
+    if major_um <= 0 or minor_um <= 0 or minimum_pixels <= 0 or minor_um > major_um:
+        raise ValueError("reference profile requires major >= minor > 0 and minimum_axis_pixels > 0")
+    major_px = major_um / float(um_per_pixel)
+    minor_px = minor_um / float(um_per_pixel)
+    conditions_confirmed = bool(raw.get("imaging_conditions_confirmed", False))
+    if not enabled:
+        status = "disabled"
+    elif not conditions_confirmed:
+        status = "diagnostic_only_imaging_conditions_unconfirmed"
+    elif minor_px < minimum_pixels:
+        status = "below_stable_minor_axis_sampling"
+    else:
+        status = "sampling_sufficient_for_profile_review"
+    report = {
+        "name": str(raw.get("name", "rigaku_2021_cu_ka_008_tsd_image_feature")),
+        "enabled": enabled,
+        "imaging_conditions_confirmed": conditions_confirmed,
+        "source_conditions": str(raw.get("source_conditions", "4H-SiC; Cu Kalpha; (008) reflection")),
+        "expected_major_axis_um": major_um,
+        "expected_minor_axis_um": minor_um,
+        "expected_major_axis_px": major_px,
+        "expected_minor_axis_px": minor_px,
+        "minimum_axis_pixels": minimum_pixels,
+        "status": status,
+        "classification_gating": False,
+        "interpretation": (
+            "Approximate paper image-feature dimensions for diagnostic review only; "
+            "not a universal TSD acceptance rule."
+        ),
+    }
+    warnings: list[str] = []
+    if enabled and not conditions_confirmed:
+        warnings.append(
+            "Rigaku 2021 morphology profile is diagnostic only because Cu Kalpha/(008) "
+            "imaging-condition equivalence has not been confirmed"
+        )
+    if enabled and conditions_confirmed and minor_px < minimum_pixels:
+        warnings.append(
+            "The expected 30 um minor axis spans only "
+            f"{minor_px:.2f} px, below the configured {minimum_pixels:g} px stable "
+            "morphology-review threshold; TSD shape classification is not reliable"
+        )
+    return report, warnings
+
+
 def _odd_scaled(value: int, scale: float, minimum: int = 1) -> int:
     result = max(minimum, int(round(float(value) / max(scale, 1.0))))
     if result % 2 == 0:
@@ -748,12 +811,16 @@ def analyze_image(
 
         accepted_count = int(detected.frame["accepted"].sum()) if not detected.frame.empty else 0
         density: DensityResult = calculate_density(accepted_count, area.valid_area_cm2)
+        reference_profile, reference_warnings = _reference_profile_report(
+            analysis_config, um_per_pixel=geometry.um_per_pixel
+        )
         warnings = list(dict.fromkeys(
             image_data.metadata.warnings
             + image_data.metadata.limitations
             + geometry.warnings
             + list(physical_resolution.warnings)
             + detected.warnings
+            + reference_warnings
         ))
         summary: dict[str, Any] = {
             "status": "completed",
@@ -804,6 +871,14 @@ def analyze_image(
             "counting_uncertainty_scope": COUNTING_UNCERTAINTY_NOTE,
             "scientific_interpretation_limit": SCIENTIFIC_LIMITATION_ZH,
             "real_annotation_validation_status": "not validated on real SiC data",
+            "paper_reference_alignment": {
+                "automatic_xrt_marker": "red rectangle",
+                "independent_reference_marker": "yellow circle",
+                "independent_reference_data_supplied": False,
+                "independent_reference_status": "not provided; no DIC/KOH agreement claim",
+                "source": "Reimann and Kranert, Rigaku Journal 37(2), 2021, Fig. 5",
+            },
+            "reference_morphology_profile": reference_profile,
             "uncertainty_budget_summary": {
                 "counting": "Poisson/Garwood interval reported",
                 "classification": "not quantified: no real SiC expert-label validation",
@@ -826,6 +901,11 @@ def analyze_image(
                 x0, y0, x1 - x0, y1 - y0, normalize=False
             )
 
+        def comparison_crop_reader(x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+            return image_data.source.read_region(
+                x0, y0, x1 - x0, y1 - y0, normalize=True
+            )
+
         output_files = write_analysis_outputs(
             folder,
             summary,
@@ -839,6 +919,7 @@ def analyze_image(
             candidate_mask=detected.candidate_mask,
             source_shape=image_data.shape,
             crop_reader=crop_reader,
+            comparison_crop_reader=comparison_crop_reader,
         )
         output_files["resolved_physical_parameters"] = resolved_parameters_path
         # Include report/PNG/CSV generation in the stated wall-clock runtime,

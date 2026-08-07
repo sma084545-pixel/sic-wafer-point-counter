@@ -117,6 +117,16 @@ def test_physical_rules_are_resolution_consistent() -> None:
             ).density_cm2
         )
         diameters.extend(feature.equivalent_diameter_mm for feature in accepted)
+        for feature in accepted:
+            assert feature.equivalent_diameter_um == pytest.approx(
+                feature.equivalent_diameter_px * geometry.um_per_pixel
+            )
+            assert feature.major_axis_length_um == pytest.approx(
+                feature.major_axis_length_px * geometry.um_per_pixel
+            )
+            assert feature.minor_axis_length_um == pytest.approx(
+                feature.minor_axis_length_px * geometry.um_per_pixel
+            )
 
     assert counts == [3, 3, 3]
     assert max(densities) - min(densities) < 0.002
@@ -215,3 +225,38 @@ def test_tiled_boundary_distance_expands_beyond_tile_edges() -> None:
     expected = cv2.distanceTransform(full.astype(np.uint8), cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
     assert distance[40, 40] == pytest.approx(expected[250, 250])
     assert distance[40, 40] > 100.0
+
+
+
+def test_rigaku_reference_profile_is_diagnostic_and_warns_when_under_sampled() -> None:
+    from sic_wafer_counter.pipeline import _reference_profile_report
+
+    report, warnings = _reference_profile_report(
+        {
+            "reference_profile": {
+                "enabled": True,
+                "imaging_conditions_confirmed": True,
+                "expected_major_axis_um": 50.0,
+                "expected_minor_axis_um": 30.0,
+                "minimum_axis_pixels": 3.0,
+            }
+        },
+        um_per_pixel=12.0,
+    )
+    assert report["expected_major_axis_px"] == pytest.approx(50.0 / 12.0)
+    assert report["expected_minor_axis_px"] == pytest.approx(2.5)
+    assert report["status"] == "below_stable_minor_axis_sampling"
+    assert report["classification_gating"] is False
+    assert warnings and "not reliable" in warnings[0]
+
+    unconfirmed, unconfirmed_warnings = _reference_profile_report(
+        {
+            "reference_profile": {
+                "enabled": True,
+                "imaging_conditions_confirmed": False,
+            }
+        },
+        um_per_pixel=5.0,
+    )
+    assert unconfirmed["status"] == "diagnostic_only_imaging_conditions_unconfirmed"
+    assert unconfirmed_warnings

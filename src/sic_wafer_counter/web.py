@@ -213,8 +213,12 @@ class _JobManager:
             artifact_names = (
                 "report.html", "summary.json", "defects_all.csv", "defects_accepted.csv",
                 "defects_rejected.csv", "overlay_accepted.png", "overlay_all_candidates.png",
-                "valid_analysis_mask.png", "preprocessed_preview.png", "radial_density.png",
-                "angular_density.png", "radial_density.csv", "angular_density.csv", "regional_density.csv",
+                "overlay_xrt_red_boxes.png", "xrt_detection_detail_montage.png",
+                "defect_comparison_details.png",
+                "valid_analysis_mask.png", "preprocessed_preview.png", "defect_size_histogram.png",
+                "radial_density.png", "angular_density.png", "density_heatmap.png",
+                "density_heatmap_grid.csv", "radial_density.csv", "angular_density.csv",
+                "regional_density.csv",
             )
             artifacts = {name: name for name in artifact_names if (job.output_dir / name).is_file()}
             with self._lock:
