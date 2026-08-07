@@ -78,6 +78,7 @@ def test_outputs_are_complete_and_reproducible(generate_synthetic, default_confi
     for filename in (
         "summary.json", "summary.csv", "defects_all.csv", "defects_accepted.csv",
         "defects_rejected.csv", "overlay_accepted.png", "overlay_all_candidates.png",
+        "defect_comparison_details.png",
         "wafer_mask.png", "valid_analysis_mask.png", "preprocessed_preview.png",
         "candidate_mask.png", "analysis_config.yaml", "run.log", "report.html",
         "resolved_physical_parameters.yaml",

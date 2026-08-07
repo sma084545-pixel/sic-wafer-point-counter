@@ -30,7 +30,8 @@ def test_static_showcase_is_scientifically_bounded_and_private() -> None:
     html = SITE.read_text(encoding="utf-8")
     assert "满足当前图像判定和筛选标准的黑色点状目标" in html
     assert "未在真实 SiC 专家标注上验证" in html
-    assert "GitHub Pages 是只读展示页" in html
+    assert "浏览器分析页" in html
+    assert 'href="analyze.html"' in html
     assert "74,891" not in html
     assert "SiC11-20" not in html
     assert "/Users/" not in html

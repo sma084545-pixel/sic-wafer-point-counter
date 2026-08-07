@@ -82,6 +82,9 @@ output:
   draw_rejected: true
   generate_html_report: true
   generate_heatmap: true
+  generate_defect_comparison: true
+  comparison_max_candidates: 12
+  comparison_crop_half_size_px: 48
   save_candidate_crops: true
   crop_half_size_px: 32
 

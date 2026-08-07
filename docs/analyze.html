@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="在浏览器本地运行 SiC 晶圆 XRT 点状目标科研分析，预览缺陷对照细节、整片密度热图和完整 HTML 报告。">
+  <meta name="theme-color" content="#f4f7f6">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>浏览器分析｜SiC 晶圆点状目标平台</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/analyze.css?v=20260807a">
+  <script type="module" src="assets/analyze.js?v=20260807a"></script>
+</head>
+<body>
+  <a class="skip-link" href="#content">跳到主要内容</a>
+  <header class="site-header">
+    <div class="shell header-inner">
+      <a class="brand" href="index.html" aria-label="返回项目首页">
+        <svg class="brand-mark" aria-hidden="true" viewBox="0 0 42 42">
+          <circle cx="21" cy="7" r="3"></circle><circle cx="21" cy="35" r="3"></circle>
+          <circle cx="7" cy="21" r="3"></circle><circle cx="35" cy="21" r="3"></circle>
+          <circle cx="11" cy="11" r="2.5"></circle><circle cx="31" cy="11" r="2.5"></circle>
+          <circle cx="11" cy="31" r="2.5"></circle><circle cx="31" cy="31" r="2.5"></circle>
+          <circle class="brand-mark-core" cx="21" cy="21" r="6"></circle>
+        </svg>
+        <span><strong>SiC 晶圆</strong><small>浏览器科研分析</small></span>
+      </a>
+      <nav aria-label="页面导航">
+        <a href="#upload">上传与参数</a>
+        <a href="#results">分析结果</a>
+        <a href="index.html">项目说明</a>
+      </nav>
+    </div>
+  </header>
+
+  <main id="content" tabindex="-1">
+    <section class="intro shell">
+      <p class="eyebrow">本地浏览器运行 · 无服务器上传</p>
+      <h1>上传晶圆图像，生成可复核分析报告</h1>
+      <p class="intro-copy">该页面在独立 Web Worker 中运行项目打包的原始 Python <code>analyze_image</code> 管线。文件只写入当前标签页的临时内存，不上传到网站服务器。</p>
+      <div class="boundary" role="note" aria-label="科学解释边界">
+        <strong>科学解释边界</strong>
+        <p>这里统计的是满足当前图像判定和筛选规则的黑色点状目标。未经材料专家标注或独立实验确认，不得把每个黑点无条件解释为真实物理位错。</p>
+      </div>
+    </section>
+
+    <section class="workspace shell" id="upload" aria-labelledby="upload-title">
+      <form class="control-panel" id="analysis-form">
+        <div class="panel-heading">
+          <div><p class="step">01</p><h2 id="upload-title">图像与参数</h2></div>
+          <span class="privacy-badge">仅本机内存</span>
+        </div>
+
+        <label class="drop-zone" for="image-file" id="drop-zone">
+          <span class="drop-icon" aria-hidden="true">＋</span>
+          <strong>选择或拖入晶圆图像</strong>
+          <span>PNG、JPG、BMP、TIF、TIFF</span>
+          <input id="image-file" name="image-file" type="file" accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,image/png,image/jpeg,image/bmp,image/tiff">
+        </label>
+        <div class="file-line" id="file-line" aria-live="polite">尚未选择文件</div>
+        <button class="button button-secondary" id="demo-button" type="button">载入内置 clean 合成样本</button>
+
+        <fieldset>
+          <legend>物理标定与检测</legend>
+          <div class="field-grid">
+            <label><span>晶圆直径（mm）</span><input id="diameter" type="number" value="100" min="0.001" step="any" required></label>
+            <label><span>外缘排除（mm）</span><input id="edge-exclusion" type="number" value="0" min="0" step="0.1" required></label>
+            <label><span>候选阈值</span><select id="threshold-method"><option value="otsu">多类 Otsu（默认）</option><option value="adaptive">自适应阈值</option><option value="quantile">响应分位数</option></select></label>
+            <label class="check-field"><input id="watershed" type="checkbox" checked><span>分水岭分离粘连点</span></label>
+          </div>
+        </fieldset>
+
+        <details class="manual-details">
+          <summary>自动晶圆识别不可靠时：手动几何</summary>
+          <p>三个值必须同时提供，坐标以原始图像像素计。</p>
+          <div class="field-grid three-fields">
+            <label><span>圆心 X（px）</span><input id="center-x" type="number" min="0" step="0.1"></label>
+            <label><span>圆心 Y（px）</span><input id="center-y" type="number" min="0" step="0.1"></label>
+            <label><span>半径（px）</span><input id="radius-px" type="number" min="0.001" step="any"></label>
+          </div>
+        </details>
+
+        <p class="limit-note" id="browser-limits">正在读取浏览器分析上限…</p>
+        <div class="form-actions">
+          <button class="button" id="analyze-button" type="submit">开始完整分析</button>
+          <button class="button button-secondary" id="cancel-button" type="button" hidden>取消本次运行</button>
+        </div>
+      </form>
+
+      <aside class="process-panel" aria-labelledby="process-title">
+        <div class="panel-heading"><div><p class="step">02</p><h2 id="process-title">运行状态</h2></div></div>
+        <div class="status-box" id="status-box" role="status" aria-live="polite">
+          <span class="status-dot" aria-hidden="true"></span>
+          <div><strong id="status-title">等待图像</strong><p id="status-message">选择图像并确认参数后开始。</p></div>
+        </div>
+        <progress id="analysis-progress" max="1" value="0" aria-label="分析进度"></progress>
+        <ol class="process-list">
+          <li>验证文件与浏览器内存上限</li>
+          <li>载入科学计算运行时和项目代码</li>
+          <li>晶圆识别、预处理、候选分割与筛选</li>
+          <li>计算有效面积、密度和计数区间</li>
+          <li>生成缺陷对照图、整片缺陷密度热图与报告</li>
+        </ol>
+        <p class="runtime-note">首次运行需从 jsDelivr 下载 Pyodide 与科学计算包，之后浏览器通常可复用缓存。运算期间页面仍可响应；可随时取消。</p>
+      </aside>
+    </section>
+
+    <section class="results shell" id="results" aria-labelledby="results-title" hidden>
+      <div class="results-heading">
+        <div><p class="step">03</p><h2 id="results-title">分析结果</h2><p id="result-file"></p></div>
+        <a class="button" id="bundle-download" download>下载完整结果 ZIP</a>
+      </div>
+
+      <div class="metric-grid" aria-label="核心分析指标">
+        <article><span>接受目标 n</span><strong id="metric-count">—</strong><small>个</small></article>
+        <article><span>有效面积 S</span><strong id="metric-area">—</strong><small>cm²</small></article>
+        <article><span>点状目标密度 ρ</span><strong id="metric-density">—</strong><small>cm<sup>−2</sup></small></article>
+        <article><span>计数不确定度</span><strong id="metric-uncertainty">—</strong><small>cm<sup>−2</sup></small></article>
+      </div>
+      <p class="confidence" id="confidence-interval"></p>
+      <div class="warning-list" id="warning-list"></div>
+
+      <section class="artifact-card" aria-labelledby="visual-title">
+        <div class="artifact-heading"><div><h3 id="visual-title">质量复核与空间分布</h3><p>优先检查缺陷识别对照细节和按实际有效面积归一化的整片缺陷密度热图。</p></div></div>
+        <div class="preview-tabs" id="preview-tabs" role="tablist" aria-label="结果图选择"></div>
+        <figure class="preview-stage">
+          <img id="artifact-preview" alt="分析输出预览">
+          <figcaption id="artifact-caption"></figcaption>
+        </figure>
+      </section>
+
+      <section class="artifact-card report-card" aria-labelledby="report-title">
+        <div class="artifact-heading"><div><h3 id="report-title">完整 HTML 报告预览</h3><p>报告内的图像和表格均来自本次运行；链接已映射到当前标签页的临时文件。</p></div></div>
+        <iframe id="report-preview" title="本次 SiC 晶圆分析 HTML 报告"></iframe>
+      </section>
+
+      <section class="artifact-card" aria-labelledby="download-title">
+        <div class="artifact-heading"><div><h3 id="download-title">单项文件</h3><p>可分别下载 CSV、JSON、掩膜、对照图、密度热图与日志。</p></div></div>
+        <ul class="download-list" id="download-list"></ul>
+      </section>
+    </section>
+
+    <section class="local-fallback shell" aria-labelledby="large-title">
+      <h2 id="large-title">超大 TIFF / BigTIFF 请使用本机工作台</h2>
+      <p>浏览器模式为可靠性和内存安全设置了明确上限，不会假装支持超大图分块。完整本机版本保留 memory-map、可选 pyvips、重叠 tile、全分辨率候选裁剪和人工复核。</p>
+      <a href="https://github.com/sma084545-pixel/sic-wafer-point-counter#readme">查看本机安装与运行说明 <span aria-hidden="true">→</span></a>
+    </section>
+  </main>
+
+  <footer><div class="shell"><strong>SiC 晶圆点状目标分析平台</strong><span>结果必须结合材料专家判断</span></div></footer>
+</body>
+</html>

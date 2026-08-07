@@ -28,11 +28,12 @@ Intentional differences:
 - Scientific chart colours are produced by the existing analysis outputs and
   were not recoloured in the browser, preserving report reproducibility.
 
-## Static GitHub Pages adaptation
+## GitHub Pages browser-analysis adaptation
 
-The public static page at `docs/index.html` reuses the accepted instrument
-system as a read-only project introduction. It never simulates upload or Python
-analysis in the browser. The latest render was checked at 1440×900 and 390×844
+The public pages at `docs/index.html` and `docs/analyze.html` reuse the accepted
+instrument system. The analysis page runs the packaged Python pipeline in a
+Pyodide Web Worker; it does not duplicate the detector in JavaScript and does
+not upload image bytes to a server. The latest render was checked at 1440×900 and 390×844
 against `concept-overview-desktop.png`, `concept-result-desktop.png`, and the
 two public clean-synthetic implementation captures.
 
@@ -40,13 +41,17 @@ two public clean-synthetic implementation captures.
 |---|---|---|---|
 | Scientific hierarchy | Boundary and rho definition lead the application concepts | Hero leads to the boundary panel before feature claims | Matched |
 | Palette and type | White/cool-grey surfaces, SiC teal, compact system sans | Exact shared tokens and system Chinese fallbacks | Matched |
-| Data integrity | Result concept separates n, S, rho, interval, and validation | Fixed-seed clean values are shown separately with an explicit real-validation warning | Matched |
+| Data integrity | Result concept separates n, S, rho, interval, and validation | Live result cards read the generated summary; the fixed-seed demo remains explicitly synthetic | Matched |
 | Image treatment | Wafer result remains the visual anchor | Clean-synthetic desktop result is the only above-fold data image | Matched |
+| Audit detail | Candidate decisions must remain visually reviewable | Browser results lead with raw-versus-decision detail montage, followed by numbered overlays | Matched |
+| Spatial output | Counts must not masquerade as density | Whole-wafer heatmap uses actual valid-mask area per spatial bin and labels cm^-2 | Matched |
 | Responsive structure | Mobile concept stacks metrics and imagery without tiny tables | 390×844 has zero document overflow and native-width media | Matched |
 | Accessibility | Existing design requires landmarks, skip link, focus and alt text | One H1, semantic landmarks, visible focus, descriptive figures and reduced motion | Matched |
 
-The above-the-fold copy differs intentionally because this page explains and
-distributes the project rather than operating the analyzer. No account,
-settings, upload, or fake interactive controls were introduced. The public
-snapshot excludes real source images, paths, run outputs, candidate crops and
-the earlier overview capture that exposed a real sample filename.
+The introductory page remains concise, while the separate analysis page adds
+native upload, explicit parameters, honest indeterminate running state,
+cancellation, artifact preview, HTML report preview, and ZIP download. Browser
+limits are shown before analysis and oversized images are refused rather than
+silently downsampled. The public snapshot excludes real source images, paths,
+run outputs, candidate crops and the earlier overview capture that exposed a
+real sample filename.

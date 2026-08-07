@@ -466,6 +466,173 @@ def save_candidate_crops(
     return frame
 
 
+def save_defect_comparison_details(
+    original_image: np.ndarray | None,
+    defects: pd.DataFrame,
+    output_path: str | Path,
+    *,
+    half_size_px: int = 48,
+    max_candidates: int = 12,
+    source_shape: tuple[int, int] | None = None,
+    crop_reader: Callable[[int, int, int, int], np.ndarray] | None = None,
+) -> Path:
+    """Save a deterministic raw-versus-decision candidate audit montage.
+
+    The montage samples both accepted and rejected candidates without changing
+    the underlying count.  Each card shows the normalized raw crop beside the
+    same crop with the automatic decision marker.  Full-resolution TIFF values
+    remain available through ``candidate_crops`` when that export is enabled;
+    this PNG is a compact visual comparison for reports and browser runs.
+    """
+
+    if half_size_px < 8:
+        raise ValueError("half_size_px must be at least 8")
+    if max_candidates < 1:
+        raise ValueError("max_candidates must be positive")
+    if max_candidates > 60:
+        raise ValueError("max_candidates must not exceed 60")
+    if crop_reader is None and original_image is None:
+        raise ValueError("Either original_image or crop_reader is required")
+
+    frame = defects_to_frame(defects)
+    accepted = frame.loc[frame["accepted"].map(_truthy)].copy()
+    rejected = frame.loc[~frame["accepted"].map(_truthy)].copy()
+
+    def sample_rows(group: pd.DataFrame, count: int) -> pd.DataFrame:
+        if count <= 0 or group.empty:
+            return group.iloc[0:0]
+        ordered = group.sort_values("defect_id", kind="stable")
+        if len(ordered) <= count:
+            return ordered
+        positions = np.linspace(0, len(ordered) - 1, count, dtype=int)
+        return ordered.iloc[positions]
+
+    accepted_slots = min(len(accepted), (max_candidates + 1) // 2)
+    rejected_slots = min(len(rejected), max_candidates - accepted_slots)
+    remaining = max_candidates - accepted_slots - rejected_slots
+    if remaining:
+        accepted_slots += min(remaining, len(accepted) - accepted_slots)
+        remaining = max_candidates - accepted_slots - rejected_slots
+        rejected_slots += min(remaining, len(rejected) - rejected_slots)
+    selected = pd.concat(
+        [sample_rows(accepted, accepted_slots), sample_rows(rejected, rejected_slots)],
+        ignore_index=True,
+    )
+
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    card_width, card_height = 388, 224
+    columns = 3
+    rows = max(1, int(math.ceil(max(1, len(selected)) / columns)))
+    header_height = 72
+    canvas = np.full((header_height + rows * card_height, columns * card_width, 3), 248, np.uint8)
+    cv2.putText(
+        canvas,
+        "Defect recognition detail comparison",
+        (20, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.78,
+        (30, 42, 48),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "Left: raw local grayscale   Right: automatic decision   Green=accepted, red=rejected",
+        (20, 56),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.43,
+        (70, 82, 88),
+        1,
+        cv2.LINE_AA,
+    )
+    if selected.empty:
+        cv2.putText(
+            canvas,
+            "No candidates were available for comparison.",
+            (20, header_height + 48),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.58,
+            (80, 80, 80),
+            1,
+            cv2.LINE_AA,
+        )
+    else:
+        if source_shape is not None:
+            source_height, source_width = map(int, source_shape[:2])
+        elif original_image is not None:
+            source_height, source_width = np.asarray(original_image).shape[:2]
+        else:  # guarded above; keeps type checkers and alternate readers clear
+            raise ValueError("source_shape is required for crop_reader-only comparison")
+
+        tile_size = 156
+        for position, (_, record) in enumerate(selected.iterrows()):
+            x = int(round(float(record["centroid_x_px"])))
+            y = int(round(float(record["centroid_y_px"])))
+            x0, x1 = max(0, x - half_size_px), min(source_width, x + half_size_px + 1)
+            y0, y1 = max(0, y - half_size_px), min(source_height, y + half_size_px + 1)
+            if crop_reader is not None:
+                try:
+                    raw_crop = np.asarray(crop_reader(x0, y0, x1, y1))
+                except Exception as exc:  # backend readers expose different error classes
+                    LOGGER.warning("Comparison crop reader failed for defect %s: %s", record.get("defect_id"), exc)
+                    continue
+            else:
+                raw_crop = np.asarray(original_image)[y0:y1, x0:x1]  # type: ignore[index]
+            if raw_crop.size == 0:
+                continue
+            display = normalize_for_display(raw_crop, 0.5, 99.5)
+            display = cv2.resize(display, (tile_size, tile_size), interpolation=cv2.INTER_NEAREST)
+            raw_bgr = cv2.cvtColor(display, cv2.COLOR_GRAY2BGR)
+            marked = raw_bgr.copy()
+            accepted_value = _truthy(record.get("accepted"))
+            marker_color = (40, 190, 40) if accepted_value else (45, 45, 225)
+            scale_x = tile_size / float(max(1, x1 - x0))
+            scale_y = tile_size / float(max(1, y1 - y0))
+            marker_radius = max(
+                9,
+                min(
+                    30,
+                    int(round(float(record.get("equivalent_diameter_px", 8.0)) * 0.75 * math.sqrt(scale_x * scale_y))),
+                ),
+            )
+            center = (
+                int(round((x - x0) * scale_x)),
+                int(round((y - y0) * scale_y)),
+            )
+            if accepted_value:
+                cv2.circle(marked, center, marker_radius, marker_color, 3, cv2.LINE_AA)
+            else:
+                cv2.line(marked, (center[0] - marker_radius, center[1] - marker_radius),
+                         (center[0] + marker_radius, center[1] + marker_radius), marker_color, 3, cv2.LINE_AA)
+                cv2.line(marked, (center[0] - marker_radius, center[1] + marker_radius),
+                         (center[0] + marker_radius, center[1] - marker_radius), marker_color, 3, cv2.LINE_AA)
+
+            row, column = divmod(position, columns)
+            top = header_height + row * card_height
+            left = column * card_width
+            canvas[top + 10:top + 10 + tile_size, left + 10:left + 10 + tile_size] = raw_bgr
+            canvas[top + 10:top + 10 + tile_size, left + 176:left + 176 + tile_size] = marked
+            cv2.rectangle(canvas, (left + 4, top + 4), (left + card_width - 5, top + card_height - 5),
+                          (216, 222, 224), 1)
+            defect_id = record.get("defect_id", position + 1)
+            state = "ACCEPT" if accepted_value else "REJECT"
+            reason = "" if accepted_value else str(record.get("rejection_reason", "unspecified"))
+            label = f"ID {defect_id}  {state}" + (f"  {reason}" if reason else "")
+            cv2.putText(canvas, label[:55], (left + 10, top + 188), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.43, marker_color, 1, cv2.LINE_AA)
+            metrics = (
+                f"d_eq={float(record.get('equivalent_diameter_mm', np.nan)):.4g} mm  "
+                f"contrast={float(record.get('contrast', np.nan)):.3g}"
+            )
+            cv2.putText(canvas, metrics, (left + 10, top + 208), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.39, (65, 72, 76), 1, cv2.LINE_AA)
+
+    if not cv2.imwrite(str(destination), canvas):
+        raise OSError(f"Could not write defect comparison montage: {destination}")
+    return destination
+
+
 def write_defect_tables(defects: pd.DataFrame, output_dir: str | Path) -> dict[str, Path]:
     """Write complete, accepted, and rejected candidate tables."""
 
@@ -531,7 +698,7 @@ _REPORT_TEMPLATE = r"""<!doctype html>
     <li><a href="defects_all.csv">全部候选及拒绝原因</a></li>
     <li><a href="defects_accepted.csv">自动接受目标</a></li>
     <li><a href="defects_rejected.csv">自动拒绝目标</a></li>
-    <li><a href="candidate_crops/">原始数值 TIFF 候选裁剪及显示预览</a></li>
+    {% if candidate_crops_available %}<li><a href="candidate_crops/">原始数值 TIFF 候选裁剪及显示预览</a></li>{% endif %}
     <li><a href="analysis_config.yaml">本次实际参数</a></li>
     <li><a href="radial_density.csv">径向密度（有效面积归一化）</a></li>
     <li><a href="angular_density.csv">方位角密度（有效面积归一化）</a></li>
@@ -647,6 +814,7 @@ def generate_html_report(
     default_images = {
         "overlay_accepted.png": "自动接受目标（绿色圆圈和编号）",
         "overlay_all_candidates.png": "全部候选（接受：绿色；拒绝：红色叉）",
+        "defect_comparison_details.png": "缺陷识别对照细节（原始局部与自动判定并排）",
         "wafer_mask.png": "完整晶圆掩膜",
         "valid_analysis_mask.png": "最终有效分析掩膜",
         "preprocessed_preview.png": "预处理响应预览",
@@ -683,6 +851,7 @@ def generate_html_report(
         flat_summary=flat,
         software_version=_summary_value(summary, "software_version", default=__version__),
         generated_at=_summary_value(summary, "generated_at_utc", default=""),
+        candidate_crops_available=(folder / "candidate_crops").is_dir(),
     )
     path = folder / "report.html"
     path.write_text(report, encoding="utf-8")
@@ -770,6 +939,16 @@ def write_analysis_outputs(
                 source_shape=source_shape,
             )
         )
+        if bool(output_config.get("generate_defect_comparison", True)):
+            outputs["defect_comparison_details"] = save_defect_comparison_details(
+                original_image,
+                frame,
+                folder / "defect_comparison_details.png",
+                half_size_px=int(output_config.get("comparison_crop_half_size_px", 48)),
+                max_candidates=int(output_config.get("comparison_max_candidates", 12)),
+                source_shape=source_shape,
+                crop_reader=crop_reader,
+            )
     if full_wafer_mask is not None:
         outputs["wafer_mask"] = save_binary_mask(full_wafer_mask, folder / "wafer_mask.png", max_size=max_size)
     if valid_analysis_mask is not None:

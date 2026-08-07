@@ -136,6 +136,10 @@ python -m sic_wafer_counter.cli analyze --help
 
 ## 本机展示与分析平台
 
+公开 GitHub Pages 另提供受内存上限保护的[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)：图像字节只写入当前标签页的 Pyodide 文件系统，不上传到服务器；分析在 Web Worker 中调用项目打包的同一个 `sic_wafer_counter.pipeline.analyze_image`，不是 JavaScript 仿制算法。它会生成核心指标、全部候选 CSV、编号叠加图、缺陷识别对照细节图、按真实有效面积归一化的整片密度热图、HTML 报告以及完整 ZIP。
+
+浏览器模式固定限制为 24 MiB、600 万像素、单边 6000 px，且为控制内存不输出每个候选的独立原始位深裁剪。Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入图像不会发送到该 CDN。超大 TIFF/BigTIFF、完整候选裁剪、无网环境或需要长期保留结果时，请使用下面的本机工作台。关闭或刷新浏览器标签页前应先下载 ZIP，因为浏览器临时文件不会持久保存。
+
 安装依赖后，启动本机页面：
 
 ```bash
@@ -337,6 +341,7 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `candidate_crops/` | 每个候选的原始位深 `.tif` 局部裁剪及 `.png` 预览，供追溯/复核；候选特别多时会占用可观磁盘空间 |
 | `overlay_accepted.png` | 接受目标的绿色圆圈和编号 |
 | `overlay_all_candidates.png` | 接受目标与被拒绝候选（不同符号） |
+| `defect_comparison_details.png` | 缺陷识别对照细节拼图；抽样并排显示原始局部灰度与自动接受/拒绝标记，不替代完整候选 CSV 或原始裁剪 |
 | `wafer_mask.png` | 分割轮廓优先的完整晶圆区域（拟合圆作为物理标定） |
 | `valid_analysis_mask.png` | 面积计算真正使用的最终有效区 |
 | `preprocessed_preview.png` | 背景校正/暗响应预览 |
@@ -345,7 +350,8 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `resolved_physical_parameters.yaml` | 物理单位输入、`um_per_pixel`、转换后的像素参数及物理/旧像素参数来源 |
 | `run.log` | 加载方式、警告、失败原因、时间和大图限制 |
 | `report.html` | 可在浏览器打开的汇总报告与复核图链接 |
-| `*_histogram.png`、`*_distribution.png`、`density_heatmap.png` | 可选尺寸、径向、角度、散点和分区统计图 |
+| `*_histogram.png`、`*_distribution.png` | 可选尺寸、径向、角度和散点统计图 |
+| `density_heatmap.png` | 整片晶圆目标密度热图；每个空间 bin 按 `valid_analysis_mask` 的实际有效面积归一化，单位 cm^-2 |
 
 叠加图在超大图上按 `io.max_overlay_size` 缩小显示，但坐标从原图正确映射，CSV 中仍保留原图全局坐标。候选裁剪则从原图对应 tile 读取，不应拿预览图冒充原始分辨率。
 

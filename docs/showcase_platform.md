@@ -12,6 +12,14 @@ claim that every target is a physical dislocation. Real precision, recall, F1,
 classification uncertainty, and a dislocation interpretation remain
 unavailable until expert-labelled real SiC data are supplied.
 
+The GitHub Pages companion at `docs/analyze.html` adds a bounded browser-only
+path for conventional images. It downloads a pinned Pyodide runtime, verifies
+the packaged project wheel by SHA-256, and calls the same `analyze_image`
+function in a Web Worker. Uploaded bytes remain inside that tab's temporary
+filesystem. It intentionally refuses files above 24 MiB, 6 million pixels, or
+6000 px on either side; the local workbench remains the supported BigTIFF/tiled
+path.
+
 ## Information architecture
 
 1. **Overview** — scientific boundary, `rho = n / S`, latest persistent result,

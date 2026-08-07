@@ -29,6 +29,7 @@
           <li><a href="#method">方法与可靠性</a></li>
           <li><a href="#demo">合成演示</a></li>
           <li><a href="#use">安装使用</a></li>
+          <li><a href="analyze.html">在线分析</a></li>
         </ul>
       </nav>
       <a class="button button-compact" href="https://github.com/sma084545-pixel/sic-wafer-point-counter">查看 GitHub</a>
@@ -42,13 +43,13 @@
           <h1>从 XRT 灰度图像到可复核的点状目标密度</h1>
           <p class="hero-lead">面向 100 mm SiC 晶圆的透明传统计算机视觉流程。保留 16 位科研灰度、使用实际有效掩膜计算面积，并为每个候选保存位置、形态、判定与拒绝原因。</p>
           <div class="hero-actions">
-            <a class="button" href="#demo">查看合成结果</a>
-            <a class="text-link" href="#use">获取并运行项目 <span aria-hidden="true">→</span></a>
+            <a class="button" href="analyze.html">上传图像并分析</a>
+            <a class="text-link" href="#demo">查看合成结果 <span aria-hidden="true">→</span></a>
           </div>
           <dl class="hero-facts">
             <div><dt>输入</dt><dd>PNG · TIFF · BigTIFF</dd></div>
             <div><dt>科研通道</dt><dd>float32 [0,1]</dd></div>
-            <div><dt>核心验证</dt><dd>52 tests passed</dd></div>
+            <div><dt>核心验证</dt><dd>56 tests passed</dd></div>
           </dl>
         </div>
         <figure class="hero-figure">
@@ -98,7 +99,11 @@
         </article>
         <article>
           <h3>人工与专家验证</h3>
-          <p>输出编号叠加图、候选 CSV 和局部裁剪；支持逐个复核以及按晶圆划分校准、验证和锁定测试集，避免同片晶圆跨集合泄漏。</p>
+          <p>输出编号叠加图、候选 CSV、局部裁剪和缺陷识别对照细节图；支持逐个复核以及按晶圆划分校准、验证和锁定测试集。</p>
+        </article>
+        <article>
+          <h3>整片密度分布</h3>
+          <p>热图按每个空间 bin 的真实有效掩膜面积归一化为 cm<sup>−2</sup>，不会把外圈面积更大造成的计数增加误判成密度升高。</p>
         </article>
       </div>
     </section>
@@ -132,7 +137,7 @@
         <div><span>接受目标 n</span><strong>96</strong><small>个</small></div>
         <div><span>有效面积 S</span><strong>78.7001</strong><small>cm²</small></div>
         <div><span>点状目标密度 ρ</span><strong>1.21982</strong><small>cm<sup>−2</sup></small></div>
-        <div><span>自动化测试</span><strong>52 / 52</strong><small>passed</small></div>
+        <div><span>自动化测试</span><strong>56 / 56</strong><small>passed</small></div>
       </div>
       <div class="demo-grid">
         <figure>
@@ -153,8 +158,8 @@
     <section class="section section-tinted" id="use">
       <div class="shell use-grid">
         <div>
-          <h2>下载后在本机运行完整分析</h2>
-          <p>GitHub Pages 是只读展示页。图像上传、TIFF 处理、候选检测和报告生成仍在本机 Python 环境中执行，不会把科研原图发送到本网站。</p>
+          <h2>网页快速分析，超大图使用本机工作台</h2>
+          <p><a href="analyze.html">浏览器分析页</a>可上传常规图像，并在当前标签页的 Pyodide Web Worker 中运行同一 Python 科研管线，生成缺陷对照图、整片密度热图、HTML 报告和 ZIP；原图不会上传到服务器。超大 TIFF / BigTIFF 仍应使用下方本机分块路径。</p>
           <div class="code-block" role="region" aria-label="安装与运行命令" tabindex="0"><pre><code>git clone https://github.com/sma084545-pixel/sic-wafer-point-counter.git
 cd sic-wafer-point-counter
 python3.10 -m venv .venv
@@ -170,9 +175,9 @@ python -m pytest -q
           <dl>
             <div><dt>包含</dt><dd>源代码、配置、测试、科研说明、合成演示设计与静态站点</dd></div>
             <div><dt>不包含</dt><dd>真实 TIFF、真实候选裁剪、分析结果目录、上传缓存、虚拟环境和本机日志</dd></div>
-            <div><dt>静态网址</dt><dd>展示方法与合成结果，不执行 Python 分析</dd></div>
+            <div><dt>固定网址</dt><dd>可在浏览器本地执行受内存上限保护的完整 Python 分析；数据不上传服务器</dd></div>
           </dl>
-          <a class="button button-full" href="https://github.com/sma084545-pixel/sic-wafer-point-counter">浏览全部公开项目文件</a>
+          <a class="button button-full" href="analyze.html">打开浏览器分析工作台</a>
         </aside>
       </div>
     </section>
