@@ -65,6 +65,7 @@ sic_wafer_point_counter/
 │   ├── generate_synthetic_wafer.py
 │   ├── review_results.py
 │   ├── validate_real_annotations.py
+│   ├── bootstrap_local_web_workbench.py
 │   ├── run_local_web_workbench.sh
 │   └── install_macos_web_workbench.py
 ├── tests/
@@ -85,7 +86,11 @@ sic_wafer_point_counter/
 
 ## 安装
 
-建议使用 Python 3.10 或更新版本。在项目根目录执行：
+要求 Python 3.10 或更新版本。macOS 自带的 Python 3.9 不能运行本项目；不要仅因为命令名是 `python3` 就假定版本满足要求，应先运行 `python3 --version` 检查。
+
+macOS 新用户解压 GitHub ZIP 后，可以直接双击项目根目录的 `启动SiC晶圆浏览器工作台.command`。启动器本身可由系统 Python 3.9 执行，但只负责寻找 `python3.10` 至 `python3.14`、创建隔离环境并安装依赖；科研程序始终只在 Python 3.10+ 中运行。若已有 `.venv` 来自 Python 3.9，启动器会保留它并改建 `.venv-sic`，不会覆盖或伪装成功。第一次安装和构建 Matplotlib 字体缓存可能需要数分钟，启动器会等待服务真正监听后才打开页面。
+
+手工安装时，在项目根目录执行：
 
 ```bash
 python3.10 -m venv .venv

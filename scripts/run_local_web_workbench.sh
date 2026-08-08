@@ -17,12 +17,21 @@ mkdir -p "$LOG_DIR"
 choose_python() {
   local candidate
   local candidates=(
-    "$PROJECT_DIR/.venv/bin/python"
     "${SIC_WAFER_PYTHON:-}"
+    "$PROJECT_DIR/.venv/bin/python"
+    "$PROJECT_DIR/.venv-sic/bin/python"
+    "$PROJECT_DIR/.venv-sic-py314/bin/python"
+    "$PROJECT_DIR/.venv-sic-py313/bin/python"
+    "$PROJECT_DIR/.venv-sic-py312/bin/python"
+    "$PROJECT_DIR/.venv-sic-py311/bin/python"
+    "$PROJECT_DIR/.venv-sic-py310/bin/python"
     "$(command -v python3 || true)"
   )
   for candidate in "${candidates[@]}"; do
-    if [[ -n "$candidate" && -x "$candidate" ]] && "$candidate" -c 'import flask' >/dev/null 2>&1; then
+    if [[ -n "$candidate" && -x "$candidate" ]] && \
+      PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}" "$candidate" -c \
+      'import sys; assert sys.version_info >= (3, 10); import flask, sic_wafer_counter' \
+      >/dev/null 2>&1; then
       printf '%s' "$candidate"
       return 0
     fi
@@ -31,7 +40,9 @@ choose_python() {
 }
 
 if ! PYTHON_BIN="$(choose_python)"; then
-  echo "无法找到项目运行环境。请在项目目录运行：python3.10 -m venv .venv && .venv/bin/python -m pip install -e ." >&2
+  echo "无法找到已准备好的 Python 3.10+ 项目环境。" >&2
+  echo "请运行：python3 scripts/bootstrap_local_web_workbench.py" >&2
+  echo "引导程序会保留不兼容的旧环境，并自动寻找 python3.10–python3.14。" >&2
   exit 1
 fi
 
@@ -60,9 +71,9 @@ case "$MODE" in
     if ! is_running; then
       echo "正在启动本机工作台（首次启动可能需要约一分钟）…"
       nohup "$0" --serve >>"$LOG_FILE" 2>&1 < /dev/null &
-      # Importing OpenCV/scikit-image can take tens of seconds on a cold
-      # macOS start. Do not open a browser tab until the HTTP server listens.
-      for _ in $(seq 1 240); do
+      # A fresh environment may also build Matplotlib's font cache.  Allow up
+      # to three minutes and do not open a dead browser tab while it starts.
+      for _ in $(seq 1 720); do
         is_running && break
         sleep 0.25
       done
