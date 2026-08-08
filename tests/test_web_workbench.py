@@ -57,6 +57,8 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
                 "overlay_accepted.png",
                 "overlay_xrt_red_boxes.png",
                 "xrt_detection_detail_montage.png",
+                "paper_detection_field.png",
+                "paper_aligned_result_figure.png",
                 "defect_comparison_details.png",
                 "defect_size_histogram.png",
                 "density_heatmap.png",
@@ -66,6 +68,8 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             for name in (
                 "overlay_xrt_red_boxes.png",
                 "xrt_detection_detail_montage.png",
+                "paper_detection_field.png",
+                "paper_aligned_result_figure.png",
                 "defect_comparison_details.png",
                 "density_heatmap.png",
             ):

@@ -421,6 +421,7 @@ config["output"]["generate_defect_comparison"] = True
 config["output"]["generate_xrt_red_box_overlay"] = True
 config["output"]["generate_xrt_detection_detail_montage"] = True
 config["output"]["generate_heatmap"] = True
+config["output"]["generate_paper_aligned_figure"] = True
 config["io"]["max_overlay_size"] = int(options["max_overlay_size_px"])
 
 is_tiff = bool(options["source_metadata"]["is_tiff"])

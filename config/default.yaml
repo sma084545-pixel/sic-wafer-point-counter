@@ -15,6 +15,16 @@ reference_profile:
   expected_minor_axis_um: 30.0
   minimum_axis_pixels: 3.0
 
+# Optional independently registered reference overlay. Yellow circles are drawn
+# only after both images' SHA-256 values and registered coordinates pass strict
+# checks. These references never modify automatic candidate acceptance or rho.
+independent_reference:
+  enabled: false
+  csv_path:
+  reference_image_path:
+  matching_tolerance_um: 75.0
+  coverage_complete: false
+
 io:
   preview_max_size: 2000
   tile_size: 2048
@@ -108,6 +118,9 @@ output:
   xrt_detection_detail_field_size_mm: 4.0
   xrt_detection_detail_max_fields: 6
   xrt_detection_detail_scale_bar_mm: 1.0
+  generate_paper_aligned_figure: true
+  paper_detail_field_size_mm: 6.0
+  paper_detail_scale_bar_mm: 2.0
   generate_defect_comparison: true
   comparison_max_candidates: 12
   comparison_crop_half_size_px: 48

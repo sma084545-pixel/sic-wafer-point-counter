@@ -1161,6 +1161,7 @@ def save_density_heatmap(
     min_valid_fraction: float = 0.05,
     grid_interval_mm: float = 10.0,
     grid_csv_path: str | Path | None = None,
+    reported_mean_density_cm2: float | None = None,
 ) -> Path:
     """Save an area-normalized point-like target density map and grid table.
 
@@ -1235,14 +1236,20 @@ def save_density_heatmap(
     _plot_valid_mask_boundary(ax, valid_mask, center_px, mm_per_pixel)
     total_area = float(grid["valid_area_cm2"].sum())
     total_count = int(grid["count"].sum())
-    mean_density = float(total_count / total_area) if total_area > 0 else float("nan")
+    grid_mean_density = float(total_count / total_area) if total_area > 0 else float("nan")
+    if reported_mean_density_cm2 is None:
+        mean_density = grid_mean_density
+    else:
+        mean_density = float(reported_mean_density_cm2)
+        if not np.isfinite(mean_density) or mean_density < 0:
+            raise ValueError("reported_mean_density_cm2 must be finite and non-negative")
     cell_size_mm = float(edges[1] - edges[0])
     ax.set(
         xlabel="x (mm)",
         ylabel="y (mm)",
         title=(
             "Accepted point-like target density\n"
-            f"mean={mean_density:.4g} cm$^{{-2}}$, n={total_count}; "
+            f"whole-wafer mean={mean_density:.4g} cm$^{{-2}}$, n={total_count}; "
             f"{cell_size_mm:.3g} mm cells, actual valid area"
         ),
         aspect="equal",
@@ -1282,6 +1289,7 @@ def save_distribution_plots(
     heatmap_clip_percentile: float = 99.5,
     heatmap_min_valid_fraction: float = 0.05,
     heatmap_grid_interval_mm: float = 10.0,
+    heatmap_reported_mean_density_cm2: float | None = None,
 ) -> dict[str, Path]:
     """Write the optional diagnostic plot set requested by the report."""
 
@@ -1311,6 +1319,7 @@ def save_distribution_plots(
             min_valid_fraction=heatmap_min_valid_fraction,
             grid_interval_mm=heatmap_grid_interval_mm,
             grid_csv_path=folder / "density_heatmap_grid.csv",
+            reported_mean_density_cm2=heatmap_reported_mean_density_cm2,
         )
         outputs["density_heatmap_grid"] = folder / "density_heatmap_grid.csv"
     return outputs

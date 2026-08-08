@@ -13,6 +13,8 @@ const results = document.querySelector("#results");
 const bundleDownload = document.querySelector("#bundle-download");
 
 const imageLabels = {
+  "paper_aligned_result_figure.png": "论文式点状目标与整片密度综合成果",
+  "paper_detection_field.png": "单视场论文语义对照图",
   "xrt_detection_detail_montage.png": "论文风格局部视场（自动红框；独立参考未提供）",
   "overlay_xrt_red_boxes.png": "自动 XRT 点状候选红框图（无独立验证黄圈）",
   "defect_comparison_details.png": "原图与自动判定复核（非 DIC/KOH 验证）",
@@ -249,7 +251,7 @@ async function runAnalysis(event) {
     dropZone.setAttribute("aria-disabled", "true");
     cancelButton.hidden = false;
     setStatus("running", "正在准备分析", "正在把只读 File 交给独立 Worker；尚未复制到 Python 内存。", null);
-    worker = new Worker("assets/analysis-worker.mjs", { type: "module" });
+    worker = new Worker("assets/analysis-worker.mjs?v=20260808c", { type: "module" });
     worker.addEventListener("message", (messageEvent) => {
       if (generation !== runGeneration) return;
       const payload = messageEvent.data;

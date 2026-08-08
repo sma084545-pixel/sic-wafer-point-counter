@@ -25,6 +25,7 @@ from jinja2 import BaseLoader, Environment, select_autoescape
 
 from . import __version__
 from .density import calculate_density
+from .paper_alignment import references_from_config
 from .validation import spatial_heterogeneity_indicator
 from .visualization import (
     normalize_for_display,
@@ -51,10 +52,31 @@ UNCERTAINTY_NOTE_ZH = (
     "该统计不确定度只反映有限计数造成的随机误差，不包含图像分割、漏检、误检以及物理判定错误"
     "造成的系统误差。"
 )
-PAPER_ALIGNMENT_NOTE_ZH = (
+PAPER_ALIGNMENT_NOTE_NOT_PROVIDED_ZH = (
     "论文式红色矩形仅表示程序自动接受的 XRT 点状候选。黄色圆圈在原论文中表示独立 DIC 坑位；"
     "本分析没有导入、配准并核验独立 DIC/KOH 数据，因此不会生成黄色验证圈，也不能声称完成 TSD 物理验证。"
 )
+
+
+def _paper_alignment_note(summary: Mapping[str, Any]) -> str:
+    """Describe the independent-reference status without overstating evidence."""
+
+    reference = summary.get("independent_reference")
+    if not isinstance(reference, Mapping) or reference.get("status") == "not provided":
+        return PAPER_ALIGNMENT_NOTE_NOT_PROVIDED_ZH
+    method = str(reference.get("method", "independent reference"))
+    count = int(reference.get("confirmed_registered_count", 0))
+    coverage = reference.get("agreement", {}).get("reference_coverage_complete", False)
+    precision_note = (
+        "已声明参考覆盖完整，可按匹配容差计算 precision/recall/F1。"
+        if coverage
+        else "参考覆盖未声明完整，因此只报告匹配数和相对于已登记参考点的召回率，不计算 precision/F1。"
+    )
+    return (
+        f"黄色圆圈来自经过源图与独立参考图 SHA-256 核验、并已配准的 {method} 坐标，共 {count} 个；"
+        "红框仍只表示程序自动接受的 XRT 点状候选，参考点不会改变自动 n 或 rho。"
+        f"{precision_note} 单次配准对照不能证明该图像规则在其他晶圆上普遍等同于 TSD。"
+    )
 
 DEFECT_COLUMNS: tuple[str, ...] = (
     "defect_id",
@@ -730,16 +752,18 @@ def save_xrt_detection_detail_montage(
     scale_bar_mm: float = 1.0,
     source_shape: tuple[int, int] | None = None,
     crop_reader: Callable[[int, int, int, int], np.ndarray] | None = None,
+    independent_reference_points: pd.DataFrame | None = None,
+    independent_reference_label: str = "NOT PROVIDED",
 ) -> Path:
     """Save full-resolution local XRT fields with automatic red boxes.
 
     ``crop_reader`` must return scientific floating-point values using the image
     source's single global normalization
     window. Every accepted candidate whose true segmentation ``bounding_box``
-    intersects a selected field is drawn as a red rectangle. No independent
-    reference marks are drawn; the figure explicitly states that an independent
-    reference was not provided. This artifact reviews image-rule output only and
-    never changes candidate acceptance or density.
+    intersects a selected field is drawn as a red rectangle. Yellow circles are
+    drawn only for coordinates already verified by :mod:`paper_alignment`; this
+    function never infers or invents them. The artifact never changes candidate
+    acceptance or density.
     """
 
     if not np.isfinite(mm_per_pixel) or mm_per_pixel <= 0:
@@ -777,6 +801,22 @@ def save_xrt_detection_detail_montage(
     accepted = accepted.sort_values(
         ["_id_numeric", "_id_text", "_y", "_x"], kind="stable", na_position="last"
     ).reset_index(drop=True)
+    references = (
+        independent_reference_points.copy()
+        if independent_reference_points is not None
+        else pd.DataFrame(columns=("x_px", "y_px"))
+    )
+    if not references.empty:
+        missing_reference_columns = {"x_px", "y_px"} - set(references.columns)
+        if missing_reference_columns:
+            raise ValueError(
+                "Independent reference points are missing columns: "
+                f"{sorted(missing_reference_columns)}"
+            )
+        references["x_px"] = pd.to_numeric(references["x_px"], errors="coerce")
+        references["y_px"] = pd.to_numeric(references["y_px"], errors="coerce")
+        if references[["x_px", "y_px"]].isna().any().any():
+            raise ValueError("Independent reference points require finite x_px and y_px")
 
     bboxes: list[tuple[float, float, float, float]] = []
     for _, record in accepted.iterrows():
@@ -797,9 +837,15 @@ def save_xrt_detection_detail_montage(
         return x0, y0, x0 + field_width_px, y0 + field_height_px
 
     selected_fields: list[tuple[int, int, int, int]] = []
+    for _, reference in references.sort_values(["y_px", "x_px"], kind="stable").iterrows():
+        bounds = field_bounds(float(reference["x_px"]), float(reference["y_px"]))
+        if bounds not in selected_fields:
+            selected_fields.append(bounds)
+        if len(selected_fields) >= max_fields:
+            break
     for index in _representative_candidate_indices(accepted, max_fields):
         bounds = field_bounds(float(accepted.iloc[index]["_x"]), float(accepted.iloc[index]["_y"]))
-        if bounds not in selected_fields:
+        if bounds not in selected_fields and len(selected_fields) < max_fields:
             selected_fields.append(bounds)
 
     destination = Path(output_path)
@@ -817,20 +863,20 @@ def save_xrt_detection_detail_montage(
     canvas = np.full((canvas_height, canvas_width, 3), 248, dtype=np.uint8)
     cv2.putText(
         canvas,
-        "XRT automatic point-target detection fields",
+        "XRT point-target detection fields",
         (18, 31),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.78,
+        0.67,
         (27, 35, 40),
         2,
         cv2.LINE_AA,
     )
     cv2.putText(
         canvas,
-        "Red boxes = automatically accepted image candidates | Independent reference: NOT PROVIDED",
+        f"RED = automatic candidates | YELLOW = {str(independent_reference_label)[:32]}",
         (18, 59),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.47,
+        0.39,
         (58, 68, 73),
         1,
         cv2.LINE_AA,
@@ -875,6 +921,19 @@ def save_xrt_detection_detail_montage(
                     cv2.rectangle(tile_bgr, (left, top), (right, bottom), (0, 0, 255), 2, cv2.LINE_AA)
                     field_box_count += 1
 
+            field_reference_count = 0
+            for _, reference in references.iterrows():
+                reference_x = float(reference["x_px"])
+                reference_y = float(reference["y_px"])
+                if not (x0 <= reference_x < x1 and y0 <= reference_y < y1):
+                    continue
+                point = (
+                    int(round((reference_x - x0) * scale_x)),
+                    int(round((reference_y - y0) * scale_y)),
+                )
+                cv2.circle(tile_bgr, point, 7, (0, 255, 255), 2, cv2.LINE_AA)
+                field_reference_count += 1
+
             bar_length = max(1, int(round((float(scale_bar_mm) / float(mm_per_pixel)) * scale_x)))
             bar_length = min(bar_length, tile_size - 48)
             bar_x1 = tile_size - 18
@@ -903,7 +962,7 @@ def save_xrt_detection_detail_montage(
             actual_height_mm = (y1 - y0) * float(mm_per_pixel)
             footer = (
                 f"Field {field_number:02d} | {actual_width_mm:.3g} x {actual_height_mm:.3g} mm"
-                f" | automatic boxes: {field_box_count}"
+                f" | red boxes: {field_box_count} | yellow refs: {field_reference_count}"
             )
             cv2.putText(
                 canvas, footer, (left + 5, top + tile_size + 27), cv2.FONT_HERSHEY_SIMPLEX,
@@ -919,6 +978,99 @@ def save_xrt_detection_detail_montage(
 
     if not cv2.imwrite(str(destination), canvas):
         raise OSError(f"Could not write XRT detection detail montage: {destination}")
+    return destination
+
+
+def save_paper_aligned_result_figure(
+    detection_field_path: str | Path,
+    density_heatmap_path: str | Path,
+    output_path: str | Path,
+    *,
+    independent_reference_status: str,
+) -> Path:
+    """Combine the paper-semantics detection field and quantitative density map.
+
+    This is a presentation artifact only. Its density panel is the existing
+    area-normalized heatmap, and it never changes candidate classification,
+    count, valid area, or density.
+    """
+
+    detection = cv2.imread(str(detection_field_path), cv2.IMREAD_COLOR)
+    heatmap = cv2.imread(str(density_heatmap_path), cv2.IMREAD_COLOR)
+    if detection is None or heatmap is None:
+        raise OSError("Paper-aligned figure requires readable detection and heatmap PNG files")
+
+    target_width = max(detection.shape[1], heatmap.shape[1], 900)
+
+    def fit_width(image: np.ndarray) -> np.ndarray:
+        scale = target_width / float(image.shape[1])
+        height = max(1, int(round(image.shape[0] * scale)))
+        interpolation = cv2.INTER_CUBIC if scale > 1.0 else cv2.INTER_AREA
+        return cv2.resize(image, (target_width, height), interpolation=interpolation)
+
+    detection = fit_width(detection)
+    heatmap = fit_width(heatmap)
+    header_height = 92
+    gap = 24
+    footer_height = 72
+    canvas = np.full(
+        (
+            header_height + detection.shape[0] + gap + heatmap.shape[0] + footer_height,
+            target_width,
+            3,
+        ),
+        255,
+        dtype=np.uint8,
+    )
+    cv2.putText(
+        canvas,
+        "Paper-aligned XRT point-target analysis",
+        (24, 38),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (28, 36, 40),
+        2,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "Automatic image-rule candidates (top) and actual-area-normalized wafer density (bottom)",
+        (24, 70),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (62, 72, 76),
+        1,
+        cv2.LINE_AA,
+    )
+    y_detection = header_height
+    canvas[y_detection:y_detection + detection.shape[0]] = detection
+    y_heatmap = y_detection + detection.shape[0] + gap
+    canvas[y_heatmap:y_heatmap + heatmap.shape[0]] = heatmap
+    footer_y = y_heatmap + heatmap.shape[0] + 31
+    cv2.putText(
+        canvas,
+        f"Independent registered reference: {independent_reference_status}",
+        (24, footer_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (60, 68, 72),
+        1,
+        cv2.LINE_AA,
+    )
+    cv2.putText(
+        canvas,
+        "Density = accepted point-like targets / final valid-mask area; this figure does not by itself prove TSD identity.",
+        (24, footer_y + 26),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (60, 68, 72),
+        1,
+        cv2.LINE_AA,
+    )
+    destination = Path(output_path)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    if not cv2.imwrite(str(destination), canvas):
+        raise OSError(f"Could not write paper-aligned result figure: {destination}")
     return destination
 
 
@@ -993,6 +1145,7 @@ _REPORT_TEMPLATE = r"""<!doctype html>
     <li><a href="angular_density.csv">方位角密度（有效面积归一化）</a></li>
     <li><a href="regional_density.csv">中心/中间/边缘密度</a></li>
     {% if density_heatmap_grid_available %}<li><a href="density_heatmap_grid.csv">整片二维密度逐格数据（数量、实际有效面积、密度与泊松区间）</a></li>{% endif %}
+    {% if independent_reference_available %}<li><a href="independent_reference_points.csv">独立参考原始登记表（保留可能与不确定标注）</a></li><li><a href="independent_reference_matches.csv">自动候选与独立参考匹配审计</a></li>{% endif %}
     <li><a href="summary.json">完整机器可读摘要</a></li>
   </ul>
   <h2>科学解释边界</h2>
@@ -1101,11 +1254,22 @@ def generate_html_report(
             value = f"{float(value):.8g} mm/px"
         rows.append((label, value))
 
+    reference_available = (folder / "independent_reference_points.csv").is_file()
     default_images = {
         "overlay_accepted.png": "自动接受目标（绿色圆圈和编号）",
         "overlay_all_candidates.png": "全部候选（接受：绿色；拒绝：红色叉）",
-        "overlay_xrt_red_boxes.png": "论文语义对齐的自动 XRT 点状候选红框图（无独立 DIC/KOH 黄圈）",
-        "xrt_detection_detail_montage.png": "论文风格局部视场：红框为自动接受点状候选；独立参考未提供",
+        "overlay_xrt_red_boxes.png": (
+            "论文语义对齐图：红框为自动 XRT 点状候选，黄圈为已核验独立参考"
+            if reference_available
+            else "论文语义对齐的自动 XRT 点状候选红框图（无独立 DIC/KOH 黄圈）"
+        ),
+        "xrt_detection_detail_montage.png": (
+            "论文风格局部视场：红框为自动接受点状候选；黄圈为已核验独立参考"
+            if reference_available
+            else "论文风格局部视场：红框为自动接受点状候选；独立参考未提供"
+        ),
+        "paper_detection_field.png": "单视场论文语义对照：红框为自动候选，黄色圈仅来自已核验独立参考",
+        "paper_aligned_result_figure.png": "论文式综合成果：点状候选对照视场与按实际有效面积归一化的整片密度图",
         "defect_comparison_details.png": "原始局部与自动判定复核（非 DIC/KOH 独立验证）",
         "wafer_mask.png": "完整晶圆掩膜",
         "valid_analysis_mask.png": "最终有效分析掩膜",
@@ -1138,7 +1302,7 @@ def generate_html_report(
         warnings=_summary_value(summary, "warnings", default=[]),
         images=images,
         scientific_limit=SCIENTIFIC_LIMITATION_ZH,
-        paper_alignment_note=PAPER_ALIGNMENT_NOTE_ZH,
+        paper_alignment_note=_paper_alignment_note(summary),
         uncertainty_note=UNCERTAINTY_NOTE_ZH,
         spatial_limit=SPATIAL_INTERPRETATION_LIMIT_ZH,
         flat_summary=flat,
@@ -1146,6 +1310,7 @@ def generate_html_report(
         generated_at=_summary_value(summary, "generated_at_utc", default=""),
         candidate_crops_available=(folder / "candidate_crops").is_dir(),
         density_heatmap_grid_available=(folder / "density_heatmap_grid.csv").is_file(),
+        independent_reference_available=(folder / "independent_reference_points.csv").is_file(),
     )
     path = folder / "report.html"
     path.write_text(report, encoding="utf-8")
@@ -1206,8 +1371,45 @@ def write_analysis_outputs(
                 crop_reader=crop_reader,
             )
 
-    canonical = _canonical_summary(summary, frame, config, input_image_path)
     outputs: dict[str, Path] = {}
+    canonical = _canonical_summary(summary, frame, config, input_image_path)
+    effective_source_shape = source_shape
+    if effective_source_shape is None and original_image is not None:
+        effective_source_shape = tuple(np.asarray(original_image).shape[:2])
+    scale_for_reference = _summary_value(canonical, "mm_per_pixel", "wafer.mm_per_pixel")
+    registered_references, reference_summary, reference_matches = references_from_config(
+        config,
+        source_image_path=input_image_path,
+        source_shape=effective_source_shape,
+        automatic_candidates=frame,
+        mm_per_pixel=(
+            float(scale_for_reference) if scale_for_reference is not None else None
+        ),
+    )
+    canonical["independent_reference"] = _json_safe(reference_summary)
+    paper_reference_alignment = dict(canonical.get("paper_reference_alignment", {}))
+    paper_reference_alignment.update(
+        {
+            "automatic_xrt_marker": "red rectangle",
+            "independent_reference_marker": "yellow circle",
+            "independent_reference_data_supplied": registered_references is not None,
+            "independent_reference_status": reference_summary.get("status"),
+            "independent_reference_method": reference_summary.get("method"),
+            "physical_identity_claim": False,
+        }
+    )
+    canonical["paper_reference_alignment"] = paper_reference_alignment
+    if isinstance(summary, dict):
+        summary["independent_reference"] = _json_safe(reference_summary)
+        summary["paper_reference_alignment"] = paper_reference_alignment
+    if registered_references is not None:
+        outputs["independent_reference_points"] = folder / "independent_reference_points.csv"
+        registered_references.all_rows.to_csv(
+            outputs["independent_reference_points"], index=False
+        )
+        outputs["independent_reference_matches"] = folder / "independent_reference_matches.csv"
+        reference_matches.to_csv(outputs["independent_reference_matches"], index=False)
+
     outputs.update(write_summary_files(canonical, folder))
     outputs.update(write_defect_tables(frame, folder))
     outputs["analysis_config"] = write_analysis_config(config, folder)
@@ -1245,7 +1447,9 @@ def write_analysis_outputs(
                 mm_per_pixel=float(scale_value),
                 scale_bar_mm=float(output_config.get("xrt_overlay_scale_bar_mm", 10.0)),
                 draw_labels=bool(output_config.get("xrt_overlay_draw_labels", False)),
-                independent_reference_points=None,
+                independent_reference_points=(
+                    registered_references.points if registered_references is not None else None
+                ),
             )
         if bool(output_config.get("generate_xrt_detection_detail_montage", True)):
             outputs["xrt_detection_detail_montage"] = save_xrt_detection_detail_montage(
@@ -1262,6 +1466,34 @@ def write_analysis_outputs(
                 ),
                 source_shape=source_shape,
                 crop_reader=comparison_crop_reader,
+                independent_reference_points=(
+                    registered_references.points if registered_references is not None else None
+                ),
+                independent_reference_label=(
+                    f"registered {reference_summary.get('method')} observations"
+                    if registered_references is not None
+                    else "NOT PROVIDED"
+                ),
+            )
+        if bool(output_config.get("generate_paper_aligned_figure", True)):
+            outputs["paper_detection_field"] = save_xrt_detection_detail_montage(
+                original_image,
+                frame,
+                folder / "paper_detection_field.png",
+                mm_per_pixel=float(scale_value),
+                field_size_mm=float(output_config.get("paper_detail_field_size_mm", 6.0)),
+                max_fields=1,
+                scale_bar_mm=float(output_config.get("paper_detail_scale_bar_mm", 2.0)),
+                source_shape=source_shape,
+                crop_reader=comparison_crop_reader,
+                independent_reference_points=(
+                    registered_references.points if registered_references is not None else None
+                ),
+                independent_reference_label=(
+                    f"registered {reference_summary.get('method')} observations"
+                    if registered_references is not None
+                    else "NOT PROVIDED"
+                ),
             )
         if bool(output_config.get("generate_defect_comparison", True)):
             outputs["defect_comparison_details"] = save_defect_comparison_details(
@@ -1369,6 +1601,9 @@ def write_analysis_outputs(
             heatmap_grid_interval_mm=float(
                 spatial_config.get("heatmap_grid_interval_mm", 10.0)
             ),
+            heatmap_reported_mean_density_cm2=float(
+                _summary_value(canonical, "point_density_cm2")
+            ),
         )
     )
     if heatmap_ready:
@@ -1428,6 +1663,12 @@ def write_analysis_outputs(
                 "valid_area_cm2": heatmap_area,
                 "valid_area_relative_error_vs_primary": area_relative_error,
                 "count": heatmap_count,
+                "reported_whole_wafer_mean_density_cm2": float(
+                    _summary_value(canonical, "point_density_cm2")
+                ),
+                "grid_derived_mean_density_cm2": (
+                    float(heatmap_count / heatmap_area) if heatmap_area > 0 else None
+                ),
                 "count_matches_accepted_n": heatmap_count
                 == int(_summary_value(canonical, "accepted_count", default=heatmap_count)),
                 "minimum_display_valid_fraction": float(
@@ -1477,6 +1718,45 @@ def write_analysis_outputs(
             summary["spatial_density"] = spatial_summary
             summary["regional_density"] = spatial_summary["regional_density"]
         outputs.update(write_summary_files(canonical, folder))
+
+    if bool(output_config.get("generate_paper_aligned_figure", True)):
+        detection_path = outputs.get("paper_detection_field")
+        heatmap_path = outputs.get("density_heatmap")
+        if detection_path is not None and heatmap_path is not None:
+            reference_status = (
+                f"registered {reference_summary.get('method')} coordinates supplied"
+                if registered_references is not None
+                else "not provided; yellow markers intentionally absent"
+            )
+            outputs["paper_aligned_result_figure"] = save_paper_aligned_result_figure(
+                detection_path,
+                heatmap_path,
+                folder / "paper_aligned_result_figure.png",
+                independent_reference_status=reference_status,
+            )
+            paper_summary = {
+                "status": "generated",
+                "detection_panel": Path(detection_path).name,
+                "density_panel": Path(heatmap_path).name,
+                "combined_figure": "paper_aligned_result_figure.png",
+                "red_box_meaning": "automatically accepted image-rule candidate",
+                "yellow_circle_meaning": (
+                    "registered independent observation"
+                    if registered_references is not None
+                    else "not drawn because independent reference was not provided"
+                ),
+                "density_normalization": "count / actual valid_analysis_mask area per cell",
+                "physical_identity_claim": False,
+            }
+            canonical["paper_aligned_outputs"] = paper_summary
+            if isinstance(summary, dict):
+                summary["paper_aligned_outputs"] = paper_summary
+            outputs.update(write_summary_files(canonical, folder))
+        else:
+            LOGGER.warning(
+                "Paper-aligned combined figure skipped: a full-resolution detection field "
+                "and an actual-area density heatmap are both required"
+            )
 
     log_path = folder / "run.log"
     log_lines = list(logger_messages or [])

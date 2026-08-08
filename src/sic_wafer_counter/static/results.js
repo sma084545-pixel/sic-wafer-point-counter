@@ -16,12 +16,16 @@ const ARTIFACT_LABELS = {
   'angular_density.csv': '方位角密度 CSV',
   'regional_density.csv': '区域密度 CSV',
   'density_heatmap_grid.csv': '二维密度逐格审计 CSV',
+  'independent_reference_points.csv': '独立参考登记审计 CSV',
+  'independent_reference_matches.csv': '自动候选与独立参考匹配 CSV',
   'run.log': '运行日志',
 };
 
 const IMAGE_LABELS = {
-  'overlay_xrt_red_boxes.png': '自动 XRT 点状候选红框图（无独立验证黄圈）',
-  'xrt_detection_detail_montage.png': '论文风格局部视场（自动红框；独立参考未提供）',
+  'overlay_xrt_red_boxes.png': '论文语义对齐图（自动红框；黄圈仅在独立参考已核验时出现）',
+  'xrt_detection_detail_montage.png': '论文风格局部视场（自动红框；独立参考状态见图内说明）',
+  'paper_detection_field.png': '单视场论文语义对照图',
+  'paper_aligned_result_figure.png': '论文式点状目标与整片密度综合成果',
   'defect_comparison_details.png': '原图与自动判定复核（非 DIC/KOH 验证）',
   'overlay_accepted.png': '接受目标编号叠加图',
   'overlay_all_candidates.png': '全部候选叠加图',
@@ -240,7 +244,8 @@ export function renderRunDetail(detail) {
   const select = document.querySelector('#image-artifact');
   const imageOptions = Object.entries(IMAGE_LABELS).filter(([name]) => artifacts[name]);
   select.innerHTML = imageOptions.map(([name, label]) => `<option value="${escapeHtml(name)}">${escapeHtml(label)}</option>`).join('');
-  const preferred = imageOptions.find(([name]) => name === 'xrt_detection_detail_montage.png')
+  const preferred = imageOptions.find(([name]) => name === 'paper_aligned_result_figure.png')
+    || imageOptions.find(([name]) => name === 'xrt_detection_detail_montage.png')
     || imageOptions.find(([name]) => name === 'overlay_xrt_red_boxes.png')
     || imageOptions.find(([name]) => name === 'overlay_accepted.png')
     || imageOptions[0];

@@ -54,12 +54,14 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
     assert "大 CSV 标记为“仅 ZIP”" in html
     assert "自动 XRT 点状候选红框图" in html
     assert "论文风格局部视场" in html
+    assert "论文式综合成果图" in html
+    assert "不会伪造论文中的黄色 DIC 验证圈" in html
     assert "独立参考未提供" in html
     assert "非 DIC/KOH 验证" in html
     assert "整片密度热图" in html
     assert "未经材料专家标注或独立实验确认" in html
     assert "下载完整结果 ZIP" in html
-    assert parser.scripts == ["assets/analyze.js?v=20260808b"]
+    assert parser.scripts == ["assets/analyze.js?v=20260808c"]
     assert (DOCS / "assets" / "demo" / "synthetic_clean.png").is_file()
 
 
@@ -71,6 +73,7 @@ def test_worker_calls_packaged_pipeline_and_keeps_browser_limits_explicit() -> N
     assert 'config["output"]["generate_xrt_red_box_overlay"] = True' in worker
     assert 'config["output"]["generate_xrt_detection_detail_montage"] = True' in worker
     assert 'config["output"]["generate_heatmap"] = True' in worker
+    assert 'config["output"]["generate_paper_aligned_figure"] = True' in worker
     assert 'config["output"]["save_candidate_crops"] = False' in worker
     assert "analysis_quantized_to_uint8" not in worker or '"candidate_crops_saved": False' in worker
     assert "jsdelivr.net/pyodide/v${version}/full/" in worker
@@ -164,12 +167,20 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
 
     project_wheel = runtime / manifest["package_wheel"]["file"]
+    assert project_wheel.name == "sic_wafer_point_counter-0.2.2-py3-none-any.whl"
     with zipfile.ZipFile(project_wheel) as archive:
         packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")
+        packaged_reporting = archive.read("sic_wafer_counter/reporting.py").decode("utf-8")
+        packaged_paper_alignment = archive.read(
+            "sic_wafer_counter/paper_alignment.py"
+        ).decode("utf-8")
     assert "prefer_bounded_tiff_regions" in packaged_image_io
     assert "source_region_read_bounded" in packaged_image_io
     assert "decoded_full_source_resident" in packaged_image_io
     assert "allow_tiff_full_decode" in packaged_image_io
+    assert "paper_aligned_result_figure.png" in packaged_reporting
+    assert "source_image_sha256" in packaged_paper_alignment
+    assert "reference_image_sha256" in packaged_paper_alignment
 
 
 def test_detail_comparison_contains_accepted_and_rejected_markers(tmp_path: Path) -> None:

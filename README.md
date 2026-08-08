@@ -307,6 +307,17 @@ filters:
 
 2021 年 Rigaku 论文在 **4H-SiC、Cu Kalpha、(008) 反射**条件下报告 TSD 图像特征约为 50 µm × 30 µm。项目把它实现为默认关闭、且绝不参与自动接受/拒绝的文献诊断档案；可直接使用完整配置 `config/rigaku_2021_tsd_008.yaml` 查看该尺寸在当前像素尺度下对应多少像素。只有确认成像条件相容后才可把 `imaging_conditions_confirmed` 改为 `true`。若预期短轴少于 3 px，程序会警告形貌采样不足。该尺寸不能跨衍射几何硬编码为通用 TSD 阈值。原文证据与实现边界见 [Rigaku 文献对齐说明](docs/rigaku_2021_alignment.md)。
 
+论文图 5 中的黄色圆圈不是算法自动生成的第二种候选，而是独立 DIC 坑位。若要得到同语义的红框/黄圈对照，先建立带来源哈希的模板：
+
+```bash
+python scripts/create_registered_reference_template.py \
+  input_xrt.tif independent_dic.tif \
+  --method DIC \
+  --output registered_dic_points.csv
+```
+
+完成图像配准后填写坐标、标签和配准误差，再在配置的 `independent_reference` 中启用 CSV 与参考图。只有 `confirmed_point` 且 `registration_status=registered`、源 XRT 与独立参考图 SHA-256 均匹配的记录才会画成黄色圆圈。`possible_point` 和 `uncertain` 只保留在审计表中；任何来源或坐标校验失败都会停止报告，参考点永远不会改变自动 `n` 或 `rho`。若独立参考并非覆盖完整视场，程序不会把未匹配自动候选直接算作假阳性，也不会计算 precision/F1。
+
 候选 CSV 同时保存 `distance_to_fitted_circle_mm`（旧的圆拟合距离）与 `distance_to_valid_boundary_mm`。后者来自最终 `valid_analysis_mask` 的欧氏距离变换，因此会计入平边、notch、边缘排除带和无效区域；自动的 `near_wafer_edge` 筛选使用后者。旧列 `distance_to_wafer_edge_mm` 为兼容既有表格而保留，语义等同于拟合圆距离。
 
 预处理不会覆盖原图。中值/高斯滤波只做轻度去噪；大尺度闭运算或高斯背景估计产生 `background`，暗目标响应为 `max(background - image, 0)`。背景核应明显大于典型黑点，过小会削弱目标或制造环状响应。CLAHE 和一维条纹抑制默认关闭，启用后也应通过标注数据验证。
@@ -360,6 +371,10 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `overlay_all_candidates.png` | 接受目标与被拒绝候选（不同符号） |
 | `overlay_xrt_red_boxes.png` | 自动接受 XRT 点状候选的红色边界框和物理标尺；没有独立 DIC/KOH 数据时绝不画黄色验证圈 |
 | `xrt_detection_detail_montage.png` | 最高 6 个全分辨率代表性局部视场，按真实候选边界框绘制红框并带物理标尺；明确标注独立参考未提供 |
+| `paper_detection_field.png` | 单个论文式全分辨率视场；红框为自动候选，黄色圈只来自已经哈希核验和配准的独立参考 |
+| `paper_aligned_result_figure.png` | 将上述论文语义视场与整片实际有效面积归一化密度图组合为一张展示成果；不改变计算结果 |
+| `independent_reference_points.csv` | 原样保留的独立参考登记表，包含 possible/uncertain 与来源哈希 |
+| `independent_reference_matches.csv` | 自动候选与已登记参考点的物理距离匹配审计；参考覆盖不完整时不报告 precision/F1 |
 | `defect_comparison_details.png` | 原始局部与自动判定复核；使用同一全局科研灰度窗口，明确不是 DIC/KOH 独立验证，不替代完整候选 CSV 或原始裁剪 |
 | `wafer_mask.png` | 分割轮廓优先的完整晶圆区域（拟合圆作为物理标定） |
 | `valid_analysis_mask.png` | 面积计算真正使用的最终有效区 |
@@ -374,6 +389,16 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `density_heatmap_grid.csv` | 二维网格的 x/y 边界、有效像素数、有效面积比例、count、密度及逐格 Poisson 95% 区间 |
 
 叠加图在超大图上按 `io.max_overlay_size` 缩小显示，但坐标从原图正确映射，CSV 中仍保留原图全局坐标。候选裁剪则从原图对应 tile 读取，不应拿预览图冒充原始分辨率。
+
+如需像论文图 6 那样并排比较两片晶圆，必须先在两次配置中设置相同的 `spatial.heatmap_vmin_cm2` 与 `spatial.heatmap_vmax_cm2`，再运行：
+
+```bash
+python scripts/build_paper_comparison.py \
+  results/wafer_a results/wafer_b \
+  --output results/paper_comparison.png
+```
+
+脚本会拒绝色标不一致的两张热图，避免相同颜色代表不同密度。它沿用“点状目标密度”措辞，不会把论文中的 294、647 或 0–1500 cm^-2 强加给当前晶圆。
 
 ## 人工复核
 
