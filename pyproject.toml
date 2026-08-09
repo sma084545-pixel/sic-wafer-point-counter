@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "sic-wafer-point-counter"
-version = "0.2.3"
+version = "0.2.4"
 description = "Auditable traditional-CV counting of dark point-like targets on SiC wafer X-ray topographs"
 readme = "README.md"
 requires-python = ">=3.10"

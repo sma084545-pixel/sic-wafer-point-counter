@@ -476,6 +476,43 @@ def create_app(
             "skipped_invalid_summaries": index.skipped_invalid_summaries,
         })
 
+    def latest_persisted_run_id() -> str:
+        """Return the newest completed run, or the newest failed run as fallback."""
+
+        runs = repository.list_runs().runs
+        if not runs:
+            raise RunRepositoryError("no persisted runs")
+        completed = next(
+            (run for run in runs if str(run.get("status", "")).lower() == "completed"),
+            None,
+        )
+        return str((completed or runs[0])["run_id"])
+
+    @app.get("/api/runs/latest")
+    def latest_run_detail():
+        """Expose a stable URL for the newest locally persisted result."""
+
+        try:
+            run_id = latest_persisted_run_id()
+            detail = repository.run_detail(run_id)
+        except RunRepositoryError:
+            abort(404)
+        detail["artifacts"] = {
+            name: url_for("latest_run_file", relative_path=name)
+            for name in detail.pop("artifact_names")
+        }
+        return jsonify(detail)
+
+    @app.get("/api/runs/latest/files/<path:relative_path>")
+    def latest_run_file(relative_path: str):
+        """Serve a whitelisted artifact through a stable latest-result URL."""
+
+        try:
+            target = repository.resolve_file(latest_persisted_run_id(), relative_path)
+        except RunRepositoryError:
+            abort(404)
+        return send_file(target, as_attachment=request.args.get("download") == "1")
+
     @app.get("/api/runs/<run_id>")
     def run_detail(run_id: str):
         try:

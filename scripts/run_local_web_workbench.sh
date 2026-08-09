@@ -84,15 +84,21 @@ server_matches_project() {
   local port="${1:-$PORT}"
   "$PYTHON_BIN" - "$HOST" "$port" "$EXPECTED_VERSION" "$EXPECTED_WORKSPACE_ID" <<'PY'
 import json
+from http.client import HTTPConnection
 import sys
-from urllib.request import urlopen
 
 host, port, expected_version, expected_workspace_id = sys.argv[1:]
+connection = HTTPConnection(host, int(port), timeout=0.75)
 try:
-    with urlopen("http://{}:{}/api/health".format(host, port), timeout=0.75) as response:
-        payload = json.load(response)
+    connection.request("GET", "/api/health", headers={"Connection": "close"})
+    response = connection.getresponse()
+    if response.status != 200:
+        raise SystemExit(1)
+    payload = json.loads(response.read())
 except Exception:
     raise SystemExit(1)
+finally:
+    connection.close()
 matches = (
     payload.get("application") == "sic-wafer-point-counter"
     and payload.get("software_version") == expected_version
@@ -101,6 +107,23 @@ matches = (
 )
 raise SystemExit(0 if matches else 1)
 PY
+}
+
+wait_for_matching_server() {
+  local port="${1:-$PORT}"
+  local deadline=$((SECONDS + 180))
+  local next_notice=$((SECONDS + 10))
+  while (( SECONDS < deadline )); do
+    if server_matches_project "$port"; then
+      return 0
+    fi
+    if (( SECONDS >= next_notice )); then
+      echo "仍在等待本机工作台就绪（端口 $port）……" >&2
+      next_notice=$((SECONDS + 10))
+    fi
+    sleep 0.25
+  done
+  return 1
 }
 
 resolve_open_port() {
@@ -146,18 +169,17 @@ case "$MODE" in
       fi
       echo "正在启动本机工作台（首次启动可能需要约一分钟）…"
       nohup "$0" --serve >>"$LOG_FILE" 2>&1 < /dev/null &
-      # A fresh environment may also build Matplotlib's font cache.  Allow up
-      # to three minutes and do not open a dead browser tab while it starts.
-      for _ in $(seq 1 720); do
-        server_matches_project "$PORT" && break
-        sleep 0.25
-      done
+      # A fresh environment may also build Matplotlib's font cache.  Wait for
+      # this exact checkout, with a real three-minute wall-clock deadline.
+      wait_for_matching_server "$PORT" || true
     fi
     if ! server_matches_project "$PORT"; then
       echo "本机工作台未能启动；请查看：$LOG_FILE" >&2
       exit 1
     fi
+    echo "本机工作台已启动：http://$HOST:$PORT/（v$EXPECTED_VERSION）"
     /usr/bin/open "http://$HOST:$PORT/"
+    echo "浏览器已打开；这个终端窗口现在可以关闭。"
     ;;
   *)
     echo "用法：$0 [--serve|--open|--resolve-port]" >&2

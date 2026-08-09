@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -13,6 +14,8 @@ import threading
 from types import ModuleType
 
 import pytest
+
+from sic_wafer_counter import __version__
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -168,3 +171,61 @@ def test_launcher_avoids_an_old_server_on_the_default_port() -> None:
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == str(fallback)
     assert "旧版本或其他程序占用" in completed.stderr
+
+
+def test_launcher_reuses_matching_checkout_and_uses_direct_http_client() -> None:
+    occupied, _ = _adjacent_free_ports()
+    workspace_id = hashlib.sha256(
+        str(PROJECT_ROOT.resolve()).encode("utf-8")
+    ).hexdigest()
+
+    class CurrentServer(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            body = json.dumps({
+                "application": "sic-wafer-point-counter",
+                "software_version": __version__,
+                "workspace_id": workspace_id,
+                "status": "ready",
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", occupied), CurrentServer)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        environment = {
+            **dict(__import__("os").environ),
+            "SIC_WAFER_PYTHON": sys.executable,
+            "SIC_WAFER_WEB_PORT": str(occupied),
+            "SIC_WAFER_WEB_PORT_MAX": str(occupied),
+            "HTTP_PROXY": "http://127.0.0.1:1",
+            "HTTPS_PROXY": "http://127.0.0.1:1",
+            "NO_PROXY": "",
+        }
+        completed = subprocess.run(
+            ["/bin/bash", str(LAUNCHER), "--resolve-port"],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(occupied)
+    assert completed.stderr == ""
+    source = LAUNCHER.read_text(encoding="utf-8")
+    assert "HTTPConnection" in source
+    assert "urlopen" not in source

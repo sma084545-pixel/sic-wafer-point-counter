@@ -81,6 +81,14 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             grid = client.get(job["artifacts"]["density_heatmap_grid.csv"])
             assert grid.status_code == 200
             assert grid.mimetype == "text/csv"
+            latest = client.get("/api/runs/latest")
+            assert latest.status_code == 200
+            assert latest.get_json()["run_id"] == job["run_id"]
+            latest_figure = client.get(
+                "/api/runs/latest/files/paper_aligned_result_figure.png"
+            )
+            assert latest_figure.status_code == 200
+            assert latest_figure.mimetype == "image/png"
             assert client.get(f"/api/jobs/{job['job_id']}/files/../../README.md").status_code == 404
     finally:
         manager.shutdown()
@@ -107,6 +115,20 @@ def test_health_identifies_version_without_exposing_workspace_path(tmp_path: Pat
             }
             assert str(workspace) not in response.get_data(as_text=True)
             assert response.headers["Cache-Control"] == "no-store"
+    finally:
+        manager.shutdown()
+
+
+def test_latest_result_routes_return_404_without_persisted_runs(tmp_path: Path) -> None:
+    app = create_app(tmp_path / "workspace", max_workers=1, max_upload_mb=1)
+    app.config["TESTING"] = True
+    manager = app.extensions["sic_wafer_job_manager"]
+    try:
+        with app.test_client() as client:
+            assert client.get("/api/runs/latest").status_code == 404
+            assert client.get(
+                "/api/runs/latest/files/paper_aligned_result_figure.png"
+            ).status_code == 404
     finally:
         manager.shutdown()
 
