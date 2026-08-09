@@ -167,7 +167,7 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
 
     project_wheel = runtime / manifest["package_wheel"]["file"]
-    assert project_wheel.name == "sic_wafer_point_counter-0.2.2-py3-none-any.whl"
+    assert project_wheel.name == "sic_wafer_point_counter-0.2.3-py3-none-any.whl"
     with zipfile.ZipFile(project_wheel) as archive:
         packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")
         packaged_reporting = archive.read("sic_wafer_counter/reporting.py").decode("utf-8")

@@ -7,7 +7,9 @@ set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MODE="${1:---serve}"
-PORT="${SIC_WAFER_WEB_PORT:-8765}"
+BASE_PORT="${SIC_WAFER_WEB_PORT:-8765}"
+MAX_PORT="${SIC_WAFER_WEB_PORT_MAX:-$((BASE_PORT + 20))}"
+PORT="$BASE_PORT"
 HOST="127.0.0.1"
 LOG_DIR="$PROJECT_DIR/results"
 LOG_FILE="$LOG_DIR/web_workbench_server.log"
@@ -46,8 +48,29 @@ if ! PYTHON_BIN="$(choose_python)"; then
   exit 1
 fi
 
+if [[ ! "$BASE_PORT" =~ ^[0-9]+$ || ! "$MAX_PORT" =~ ^[0-9]+$ ]] || \
+  (( BASE_PORT < 1 || MAX_PORT > 65535 || MAX_PORT < BASE_PORT )); then
+  echo "本机工作台端口范围无效：$BASE_PORT-$MAX_PORT" >&2
+  exit 2
+fi
+
+EXPECTED_VERSION="$(
+  PYTHONPATH="$PROJECT_DIR/src${PYTHONPATH:+:$PYTHONPATH}" "$PYTHON_BIN" -c \
+    'import sic_wafer_counter; print(sic_wafer_counter.__version__)'
+)"
+EXPECTED_WORKSPACE_ID="$(
+  "$PYTHON_BIN" - "$PROJECT_DIR" <<'PY'
+from hashlib import sha256
+from pathlib import Path
+import sys
+
+print(sha256(str(Path(sys.argv[1]).resolve()).encode("utf-8")).hexdigest())
+PY
+)"
+
 is_running() {
-  "$PYTHON_BIN" - "$HOST" "$PORT" <<'PY'
+  local port="${1:-$PORT}"
+  "$PYTHON_BIN" - "$HOST" "$port" <<'PY'
 import socket
 import sys
 
@@ -55,6 +78,48 @@ with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
     sock.settimeout(0.25)
     raise SystemExit(0 if sock.connect_ex((sys.argv[1], int(sys.argv[2]))) == 0 else 1)
 PY
+}
+
+server_matches_project() {
+  local port="${1:-$PORT}"
+  "$PYTHON_BIN" - "$HOST" "$port" "$EXPECTED_VERSION" "$EXPECTED_WORKSPACE_ID" <<'PY'
+import json
+import sys
+from urllib.request import urlopen
+
+host, port, expected_version, expected_workspace_id = sys.argv[1:]
+try:
+    with urlopen("http://{}:{}/api/health".format(host, port), timeout=0.75) as response:
+        payload = json.load(response)
+except Exception:
+    raise SystemExit(1)
+matches = (
+    payload.get("application") == "sic-wafer-point-counter"
+    and payload.get("software_version") == expected_version
+    and payload.get("workspace_id") == expected_workspace_id
+    and payload.get("status") == "ready"
+)
+raise SystemExit(0 if matches else 1)
+PY
+}
+
+resolve_open_port() {
+  local candidate
+  for candidate in $(seq "$BASE_PORT" "$MAX_PORT"); do
+    if server_matches_project "$candidate"; then
+      printf '%s' "$candidate"
+      return 0
+    fi
+    if ! is_running "$candidate"; then
+      if (( candidate != BASE_PORT )); then
+        echo "端口 ${BASE_PORT} 已由旧版本或其他程序占用；当前 v${EXPECTED_VERSION} 将使用端口 ${candidate}。" >&2
+      fi
+      printf '%s' "$candidate"
+      return 0
+    fi
+  done
+  echo "端口 $BASE_PORT-$MAX_PORT 均被占用，无法安全启动本机工作台。" >&2
+  return 1
 }
 
 serve() {
@@ -67,25 +132,35 @@ case "$MODE" in
   --serve)
     serve
     ;;
+  --resolve-port)
+    resolve_open_port
+    printf '\n'
+    ;;
   --open)
-    if ! is_running; then
+    PORT="$(resolve_open_port)"
+    export SIC_WAFER_WEB_PORT="$PORT"
+    if ! server_matches_project "$PORT"; then
+      if is_running "$PORT"; then
+        echo "端口 $PORT 在检查后被其他程序占用；未打开不明服务。" >&2
+        exit 1
+      fi
       echo "正在启动本机工作台（首次启动可能需要约一分钟）…"
       nohup "$0" --serve >>"$LOG_FILE" 2>&1 < /dev/null &
       # A fresh environment may also build Matplotlib's font cache.  Allow up
       # to three minutes and do not open a dead browser tab while it starts.
       for _ in $(seq 1 720); do
-        is_running && break
+        server_matches_project "$PORT" && break
         sleep 0.25
       done
     fi
-    if ! is_running; then
+    if ! server_matches_project "$PORT"; then
       echo "本机工作台未能启动；请查看：$LOG_FILE" >&2
       exit 1
     fi
     /usr/bin/open "http://$HOST:$PORT/"
     ;;
   *)
-    echo "用法：$0 [--serve|--open]" >&2
+    echo "用法：$0 [--serve|--open|--resolve-port]" >&2
     exit 2
     ;;
 esac

@@ -192,7 +192,7 @@ Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入�
 
 - 已使用桌面 Chrome/Chromium 验证；Safari、Firefox 等当前版本使用的均为标准 HTML/CSS/JavaScript，但本轮未逐浏览器截图验收。
 - 页面显示 `ERR_CONNECTION_REFUSED` 表示本机 8765 端口没有服务监听，不是“域名错误”。先双击 `启动SiC晶圆浏览器工作台.command`，或运行 `./scripts/run_local_web_workbench.sh --open`；仍失败时检查 `results/web_workbench_server.log` 或 launchd 日志。
-- 8765 被其他程序占用时，调试可用 `SIC_WAFER_WEB_PORT=8766 ./scripts/run_local_web_workbench.sh --serve`，然后打开 `http://127.0.0.1:8766/`。不要终止身份不明的端口进程。
+- 双击启动器会通过本机 `/api/health` 同时核对软件版本和当前项目目录；如果 8765 正由旧版或其他程序占用，它不会误开旧页面，也不会终止不明进程，而会自动尝试 8766–8785 并打开匹配当前下载包的地址。
 - 超过上传上限、格式不支持或手工圆心/半径只填写一部分时，页面会在表单附近显示可操作错误；服务端仍会重复验证。
 - `results/` 和 `candidate_crops/` 可能达到数 GB。平台不会自动删除科研结果，需由研究人员在另行备份后管理磁盘。
 - 浏览器只显示已有 PNG 预览，不会为缺失缩略图临时读取原始 TIFF；完整定量值以 CSV/JSON/HTML 报告为准。

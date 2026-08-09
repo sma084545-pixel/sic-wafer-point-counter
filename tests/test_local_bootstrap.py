@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 import importlib.util
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+import socket
 import subprocess
 import sys
+import threading
 from types import ModuleType
 
 import pytest
@@ -13,6 +17,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 BOOTSTRAP = PROJECT_ROOT / "scripts" / "bootstrap_local_web_workbench.py"
+LAUNCHER = PROJECT_ROOT / "scripts" / "run_local_web_workbench.sh"
 
 
 def _load_bootstrap() -> ModuleType:
@@ -98,3 +103,68 @@ def test_incompatible_dot_venv_is_preserved_for_isolated_runtime(
     target = module._environment_target(project, Path(sys.executable))
     assert target == project / ".venv-sic"
     assert (project / ".venv").is_dir()
+
+
+def _adjacent_free_ports() -> tuple[int, int]:
+    for _ in range(100):
+        with socket.socket() as first:
+            first.bind(("127.0.0.1", 0))
+            port = int(first.getsockname()[1])
+            if port >= 65535:
+                continue
+            with socket.socket() as second:
+                try:
+                    second.bind(("127.0.0.1", port + 1))
+                except OSError:
+                    continue
+            return port, port + 1
+    raise AssertionError("could not reserve adjacent test ports")
+
+
+def test_launcher_avoids_an_old_server_on_the_default_port() -> None:
+    occupied, fallback = _adjacent_free_ports()
+
+    class OldServer(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            body = json.dumps({
+                "application": "sic-wafer-point-counter",
+                "software_version": "0.1.0",
+                "workspace_id": "old-checkout",
+                "status": "ready",
+            }).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, _format: str, *args: object) -> None:
+            return None
+
+    server = ThreadingHTTPServer(("127.0.0.1", occupied), OldServer)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        environment = {
+            **dict(__import__("os").environ),
+            "SIC_WAFER_PYTHON": sys.executable,
+            "SIC_WAFER_WEB_PORT": str(occupied),
+            "SIC_WAFER_WEB_PORT_MAX": str(fallback),
+        }
+        completed = subprocess.run(
+            ["/bin/bash", str(LAUNCHER), "--resolve-port"],
+            cwd=PROJECT_ROOT,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.strip() == str(fallback)
+    assert "旧版本或其他程序占用" in completed.stderr

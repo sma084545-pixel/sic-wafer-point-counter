@@ -11,6 +11,7 @@ import copy
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+import hashlib
 from importlib import resources
 import logging
 import math
@@ -39,6 +40,12 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_CONFIG_PATH = Path(resources.files("sic_wafer_counter").joinpath("resources/default.yaml"))
 ALLOWED_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".btf", ".bigtif", ".bigtiff"}
 LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+
+
+def _workspace_id(workspace: Path) -> str:
+    """Return a stable, non-reversible identifier for one local checkout."""
+
+    return hashlib.sha256(str(workspace.resolve()).encode("utf-8")).hexdigest()
 
 
 def _git_revision(workspace: Path) -> str:
@@ -370,6 +377,18 @@ def create_app(
             git_revision=_git_revision(root),
             demo_available={name: path.is_file() for name, path in demo_sources.items()},
         )
+
+    @app.get("/api/health")
+    def health():
+        """Identify the exact local checkout serving this loopback endpoint."""
+
+        return jsonify({
+            "application": "sic-wafer-point-counter",
+            "software_version": __version__,
+            "git_revision": _git_revision(root),
+            "workspace_id": _workspace_id(root),
+            "status": "ready",
+        })
 
     @app.errorhandler(RequestEntityTooLarge)
     def upload_too_large(_: RequestEntityTooLarge):

@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 from pathlib import Path
 import shutil
 import time
 
 from sic_wafer_counter.web import create_app
+from sic_wafer_counter import __version__
 
 
 def _wait_for_job(client, job_id: str) -> dict:
@@ -80,6 +82,31 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             assert grid.status_code == 200
             assert grid.mimetype == "text/csv"
             assert client.get(f"/api/jobs/{job['job_id']}/files/../../README.md").status_code == 404
+    finally:
+        manager.shutdown()
+
+
+def test_health_identifies_version_without_exposing_workspace_path(tmp_path: Path) -> None:
+    workspace = (tmp_path / "workspace").resolve()
+    app = create_app(workspace, max_workers=1, max_upload_mb=1)
+    app.config["TESTING"] = True
+    manager = app.extensions["sic_wafer_job_manager"]
+    try:
+        with app.test_client() as client:
+            response = client.get("/api/health")
+            assert response.status_code == 200
+            payload = response.get_json()
+            assert payload == {
+                "application": "sic-wafer-point-counter",
+                "software_version": __version__,
+                "git_revision": "未提供",
+                "workspace_id": hashlib.sha256(
+                    str(workspace).encode("utf-8")
+                ).hexdigest(),
+                "status": "ready",
+            }
+            assert str(workspace) not in response.get_data(as_text=True)
+            assert response.headers["Cache-Control"] == "no-store"
     finally:
         manager.shutdown()
 
