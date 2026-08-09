@@ -118,7 +118,7 @@ wait_for_matching_server() {
       return 0
     fi
     if (( SECONDS >= next_notice )); then
-      echo "仍在等待本机工作台就绪（端口 $port）……" >&2
+      echo "仍在等待本机工作台就绪（端口 ${port}）……" >&2
       next_notice=$((SECONDS + 10))
     fi
     sleep 0.25
@@ -177,9 +177,13 @@ case "$MODE" in
       echo "本机工作台未能启动；请查看：$LOG_FILE" >&2
       exit 1
     fi
-    echo "本机工作台已启动：http://$HOST:$PORT/（v$EXPECTED_VERSION）"
-    /usr/bin/open "http://$HOST:$PORT/"
-    echo "浏览器已打开；这个终端窗口现在可以关闭。"
+    echo "本机工作台已启动：http://${HOST}:${PORT}/（v${EXPECTED_VERSION}）"
+    if [[ "${SIC_WAFER_SKIP_BROWSER_OPEN:-0}" != "1" ]]; then
+      /usr/bin/open "http://${HOST}:${PORT}/"
+      echo "浏览器已打开；这个终端窗口现在可以关闭。"
+    else
+      echo "浏览器打开步骤已跳过；启动验收完成。"
+    fi
     ;;
   *)
     echo "用法：$0 [--serve|--open|--resolve-port]" >&2

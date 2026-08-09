@@ -218,6 +218,19 @@ def test_launcher_reuses_matching_checkout_and_uses_direct_http_client() -> None
             text=True,
             timeout=30,
         )
+        open_environment = {
+            **environment,
+            "SIC_WAFER_SKIP_BROWSER_OPEN": "1",
+        }
+        opened = subprocess.run(
+            ["/bin/bash", str(LAUNCHER), "--open"],
+            cwd=PROJECT_ROOT,
+            env=open_environment,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
     finally:
         server.shutdown()
         server.server_close()
@@ -226,6 +239,9 @@ def test_launcher_reuses_matching_checkout_and_uses_direct_http_client() -> None
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.strip() == str(occupied)
     assert completed.stderr == ""
+    assert opened.returncode == 0, opened.stderr
+    assert "v{}".format(__version__) in opened.stdout
+    assert "启动验收完成" in opened.stdout
     source = LAUNCHER.read_text(encoding="utf-8")
     assert "HTTPConnection" in source
     assert "urlopen" not in source
