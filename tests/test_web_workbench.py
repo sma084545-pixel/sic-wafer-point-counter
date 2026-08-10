@@ -7,6 +7,7 @@ import io
 from pathlib import Path
 import shutil
 import time
+import zipfile
 
 from sic_wafer_counter.web import create_app
 from sic_wafer_counter import __version__
@@ -36,6 +37,8 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             page = client.get("/")
             assert page.status_code == 200
             assert "SiC 晶圆点状目标分析" in page.get_data(as_text=True)
+            assert "独立与批量导出" in page.get_data(as_text=True)
+            assert "一次导出全部局部分析包 ZIP" in page.get_data(as_text=True)
             submit = client.post(
                 "/api/jobs",
                 data={
@@ -83,12 +86,46 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             assert grid.mimetype == "text/csv"
             latest = client.get("/api/runs/latest")
             assert latest.status_code == 200
-            assert latest.get_json()["run_id"] == job["run_id"]
+            latest_payload = latest.get_json()
+            assert latest_payload["run_id"] == job["run_id"]
+            assert set(latest_payload["exports"]) == {"figures", "data", "candidate-crops"}
             latest_figure = client.get(
                 "/api/runs/latest/files/paper_aligned_result_figure.png"
             )
             assert latest_figure.status_code == 200
             assert latest_figure.mimetype == "image/png"
+            crop_bundle = client.get(latest_payload["exports"]["candidate-crops"]["url"])
+            assert crop_bundle.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(crop_bundle.data)) as archive:
+                names = archive.namelist()
+                assert names[0] == "00_global_overview.xlsx"
+                raw_crops = [
+                    name for name in names
+                    if name.startswith("candidate_crops/") and name.endswith(".tif")
+                ]
+                previews = [
+                    name for name in names
+                    if name.startswith("candidate_crops/") and name.endswith("_preview.png")
+                ]
+                local_raw = [
+                    name for name in names
+                    if name.startswith("local_fields/") and name.endswith("03_raw_original.tif")
+                ]
+                local_marked = [
+                    name for name in names
+                    if name.startswith("local_fields/") and name.endswith("01_marked.png")
+                ]
+                local_positions = [
+                    name for name in names
+                    if name.startswith("local_fields/") and name.endswith("02_positions.xlsx")
+                ]
+                candidate_total = (
+                    job["summary"]["accepted_count"] + job["summary"]["rejected_count"]
+                )
+                assert len(raw_crops) == candidate_total
+                assert len(previews) == candidate_total
+                assert len(local_raw) == len(local_marked) == len(local_positions) > 0
+                assert "index/defects_all.csv" in names
             assert client.get(f"/api/jobs/{job['job_id']}/files/../../README.md").status_code == 404
     finally:
         manager.shutdown()

@@ -169,6 +169,8 @@ Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入�
 - 服务重启后从 `results/` 的合法直接子目录恢复历史结果；损坏摘要被隔离而不影响其他记录；
 - `defects_all.csv` 在服务端流式筛选和分页，单页最多 200 条，不把 10 万候选一次送入浏览器；
 - 叠加图、掩膜、空间密度图和报告只在本次运行目录内按白名单提供，缺失文件显示“本次运行未生成”；
+- 结果页把每一张分析图、每一份表格和报告都作为独立原文件下载；另提供“全部分析图”“全部报告与表格”“全部局部分析包”三个 ZIP；
+- “全部局部分析包”第一项固定为 `00_global_overview.xlsx`，随后按 4 mm 有效视场保存标记 PNG、位置 Excel 和未改写像素值的 TIFF，并同时保留逐候选裁剪；ZIP 逐文件写盘，不把全部局部图同时载入内存；
 - 合成演示醒目标为“合成”，clean/noisy/difficult 都重新经过真实管线，不把合成性能描述成真实 SiC 准确率；
 - 失败运行和低可信度晶圆检测保留摘要与日志，并明确拒绝显示 `rho`。
 
@@ -368,6 +370,10 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `defects_accepted.csv` | 当前规则接受的候选 |
 | `defects_rejected.csv` | 当前规则拒绝的候选；不能删除，因为需要评估漏检 |
 | `candidate_crops/` | 每个候选的原始位深 `.tif` 局部裁剪及 `.png` 预览，供追溯/复核；候选特别多时会占用可观磁盘空间 |
+| `local_fields/00_global_overview.xlsx` | 局部导出的首个文件；含整片核心指标、按最终有效掩膜面积归一化的视场密度矩阵、全部视场索引和全部候选位置 |
+| `local_fields/field_*/01_marked.png` | 参考设备局部视场形式生成的坐标标记图；红框=自动接受，绿框/叉=自动拒绝，不自动表示 TSD/TED/BPD |
+| `local_fields/field_*/02_positions.xlsx` | 该视场的物理边界、有效面积、局部密度及所有候选位置/形态/拒绝原因，可由 Excel 或 WPS 打开 |
+| `local_fields/field_*/03_raw_original.tif` | 对应 4 mm 视场的原始数值裁剪，不改变源 dtype 或像素值；显示标记只写在独立 PNG 中 |
 | `overlay_accepted.png` | 接受目标的绿色圆圈和编号 |
 | `overlay_all_candidates.png` | 接受目标与被拒绝候选（不同符号） |
 | `overlay_xrt_red_boxes.png` | 自动接受 XRT 点状候选的红色边界框和物理标尺；没有独立 DIC/KOH 数据时绝不画黄色验证圈 |
@@ -389,7 +395,7 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `density_heatmap.png` | 整片晶圆点状目标密度热图；每格按 `valid_analysis_mask` 实际有效面积归一化，单位 cm^-2；显示色标可按配置截断但不改定量表 |
 | `density_heatmap_grid.csv` | 二维网格的 x/y 边界、有效像素数、有效面积比例、count、密度及逐格 Poisson 95% 区间 |
 
-叠加图在超大图上按 `io.max_overlay_size` 缩小显示，但坐标从原图正确映射，CSV 中仍保留原图全局坐标。候选裁剪则从原图对应 tile 读取，不应拿预览图冒充原始分辨率。
+叠加图在超大图上按 `io.max_overlay_size` 缩小显示，但坐标从原图正确映射，CSV 中仍保留原图全局坐标。候选裁剪和局部视场 TIFF 均从原图对应区域读取，不拿预览图冒充原始分辨率。局部视场默认边长由 `output.local_field_size_mm: 4.0` 控制；每格密度仍使用该格在最终有效掩膜中的真实面积，而不是固定除以 `0.16 cm²`。大图生成数百个局部视场会增加运行时间和磁盘占用，可在配置中关闭 `output.generate_local_field_package`，但关闭后网页不会声称已经提供全部局部输出。
 
 如需像论文图 6 那样并排比较两片晶圆，必须先在两次配置中设置相同的 `spatial.heatmap_vmin_cm2` 与 `spatial.heatmap_vmax_cm2`，再运行：
 

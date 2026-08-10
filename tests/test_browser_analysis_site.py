@@ -167,13 +167,22 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
 
     project_wheel = runtime / manifest["package_wheel"]["file"]
-    assert project_wheel.name == "sic_wafer_point_counter-0.2.4-py3-none-any.whl"
+    assert project_wheel.name == "sic_wafer_point_counter-0.2.5-py3-none-any.whl"
     with zipfile.ZipFile(project_wheel) as archive:
+        packaged_names = set(archive.namelist())
         packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")
         packaged_reporting = archive.read("sic_wafer_counter/reporting.py").decode("utf-8")
         packaged_paper_alignment = archive.read(
             "sic_wafer_counter/paper_alignment.py"
         ).decode("utf-8")
+        packaged_default = archive.read(
+            "sic_wafer_counter/resources/default.yaml"
+        ).decode("utf-8")
+    assert {
+        "sic_wafer_counter/local_field_export.py",
+        "sic_wafer_counter/result_export.py",
+        "sic_wafer_counter/xlsx_export.py",
+    } <= packaged_names
     assert "prefer_bounded_tiff_regions" in packaged_image_io
     assert "source_region_read_bounded" in packaged_image_io
     assert "decoded_full_source_resident" in packaged_image_io
@@ -181,6 +190,8 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
     assert "paper_aligned_result_figure.png" in packaged_reporting
     assert "source_image_sha256" in packaged_paper_alignment
     assert "reference_image_sha256" in packaged_paper_alignment
+    assert "generate_local_field_package: true" in packaged_default
+    assert "local_field_size_mm: 4.0" in packaged_default
 
 
 def test_detail_comparison_contains_accepted_and_rejected_markers(tmp_path: Path) -> None:

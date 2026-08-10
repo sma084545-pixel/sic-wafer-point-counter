@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from pathlib import Path
+import zipfile
 
 import pytest
 
 from sic_wafer_counter.run_repository import RunRepository, RunRepositoryError, public_json
+from sic_wafer_counter.result_export import ResultExporter
 from sic_wafer_counter.web import create_app
 
 
@@ -115,6 +118,101 @@ def test_candidate_pagination_filters_and_crop_paths_are_bounded(tmp_path: Path)
         repository.candidate_page("candidate_run", page_size=201)
 
 
+def test_result_exports_every_figure_table_and_candidate_crop_without_recompression(
+    tmp_path: Path,
+) -> None:
+    run = _make_run(tmp_path, "export_run")
+    (run / "overlay_accepted.png").write_bytes(b"figure-bytes")
+    (run / "report.html").write_text("<p>report</p>", encoding="utf-8")
+    crop_dir = run / "candidate_crops"
+    crop_dir.mkdir()
+    local_dir = run / "local_fields"
+    field_dir = local_dir / "field_0001_X_0.000_Y_0.000"
+    field_dir.mkdir(parents=True)
+    (local_dir / "00_global_overview.xlsx").write_bytes(b"global-xlsx")
+    (field_dir / "01_marked.png").write_bytes(b"marked")
+    (field_dir / "02_positions.xlsx").write_bytes(b"positions")
+    (field_dir / "03_raw_original.tif").write_bytes(b"field-raw")
+    fields = ["defect_id", "accepted", "rejection_reason", "crop_path", "crop_preview_path"]
+    with (run / "defects_all.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for defect_id, accepted in ((1, True), (2, False)):
+            raw_name = f"candidate_{defect_id:06d}.tif"
+            preview_name = f"candidate_{defect_id:06d}_preview.png"
+            (crop_dir / raw_name).write_bytes(f"raw-{defect_id}".encode())
+            (crop_dir / preview_name).write_bytes(f"preview-{defect_id}".encode())
+            writer.writerow({
+                "defect_id": defect_id,
+                "accepted": accepted,
+                "rejection_reason": "" if accepted else "too_elongated",
+                "crop_path": f"candidate_crops/{raw_name}",
+                "crop_preview_path": f"candidate_crops/{preview_name}",
+            })
+
+    exporter = ResultExporter(RunRepository(tmp_path / "results"))
+    assert set(exporter.available("export_run")) == {"figures", "data", "candidate-crops"}
+
+    figure_archive = exporter.archive("export_run", "figures")
+    data_archive = exporter.archive("export_run", "data")
+    crop_archive = exporter.archive("export_run", "candidate-crops")
+    assert exporter.archive("export_run", "candidate-crops") == crop_archive
+
+    with zipfile.ZipFile(figure_archive) as archive:
+        assert archive.read("figures/overlay_accepted.png") == b"figure-bytes"
+        assert archive.getinfo("figures/overlay_accepted.png").compress_type == zipfile.ZIP_STORED
+    with zipfile.ZipFile(data_archive) as archive:
+        assert archive.read("reports_and_tables/report.html") == b"<p>report</p>"
+        assert archive.read("reports_and_tables/defects_all.csv")
+    with zipfile.ZipFile(crop_archive) as archive:
+        ordered_names = archive.namelist()
+        names = set(ordered_names)
+        assert ordered_names[0] == "00_global_overview.xlsx"
+        assert {
+            "local_fields/field_0001_X_0.000_Y_0.000/01_marked.png",
+            "local_fields/field_0001_X_0.000_Y_0.000/02_positions.xlsx",
+            "local_fields/field_0001_X_0.000_Y_0.000/03_raw_original.tif",
+            "candidate_crops/candidate_000001.tif",
+            "candidate_crops/candidate_000001_preview.png",
+            "candidate_crops/candidate_000002.tif",
+            "candidate_crops/candidate_000002_preview.png",
+            "index/defects_all.csv",
+            "export_manifest.json",
+            "README.txt",
+        } <= names
+        assert archive.read("candidate_crops/candidate_000001.tif") == b"raw-1"
+        assert archive.read("candidate_crops/candidate_000002_preview.png") == b"preview-2"
+        manifest = json.loads(archive.read("export_manifest.json"))
+        assert manifest["candidate_rows"] == 2
+        assert manifest["raw_crops_exported"] == 2
+        assert manifest["preview_crops_exported"] == 2
+        assert manifest["stored_without_recompression"] is True
+
+
+def test_candidate_crop_export_fails_closed_for_csv_path_escape(tmp_path: Path) -> None:
+    run = _make_run(tmp_path, "unsafe_export")
+    crop_dir = run / "candidate_crops"
+    crop_dir.mkdir()
+    (crop_dir / "preview.png").write_bytes(b"preview")
+    with (run / "defects_all.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["defect_id", "accepted", "crop_path", "crop_preview_path"],
+        )
+        writer.writeheader()
+        writer.writerow({
+            "defect_id": 1,
+            "accepted": True,
+            "crop_path": "../secret.tif",
+            "crop_preview_path": "candidate_crops/preview.png",
+        })
+    exporter = ResultExporter(RunRepository(tmp_path / "results"))
+    with pytest.raises(RunRepositoryError, match="unsafe candidate crop path"):
+        exporter.archive("unsafe_export", "candidate-crops")
+    exports = run / "exports"
+    assert not list(exports.glob("*.zip"))
+
+
 def test_api_streams_one_small_page_from_one_hundred_thousand_candidates(tmp_path: Path) -> None:
     run = _make_run(tmp_path, "large_run")
     path = run / "defects_all.csv"
@@ -168,5 +266,58 @@ def test_runs_survive_app_restart_and_security_headers_are_present(tmp_path: Pat
                 data={},
             )
             assert cross_site.status_code == 403
+    finally:
+        manager.shutdown()
+
+
+def test_export_api_exposes_individual_downloads_and_run_scoped_zip_urls(tmp_path: Path) -> None:
+    run = _make_run(tmp_path, "download_run")
+    (run / "overlay_accepted.png").write_bytes(b"png")
+    (run / "report.html").write_text("report", encoding="utf-8")
+    crop_dir = run / "candidate_crops"
+    crop_dir.mkdir()
+    (crop_dir / "candidate_000001.tif").write_bytes(b"raw")
+    (crop_dir / "candidate_000001_preview.png").write_bytes(b"preview")
+    with (run / "defects_all.csv").open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=["defect_id", "accepted", "crop_path", "crop_preview_path"],
+        )
+        writer.writeheader()
+        writer.writerow({
+            "defect_id": 1,
+            "accepted": True,
+            "crop_path": "candidate_crops/candidate_000001.tif",
+            "crop_preview_path": "candidate_crops/candidate_000001_preview.png",
+        })
+
+    app = create_app(tmp_path, max_workers=1, max_upload_mb=1)
+    app.config["TESTING"] = True
+    manager = app.extensions["sic_wafer_job_manager"]
+    try:
+        with app.test_client() as client:
+            detail = client.get("/api/runs/download_run")
+            assert detail.status_code == 200
+            payload = detail.get_json()
+            assert set(payload["exports"]) == {"figures", "data", "candidate-crops"}
+            assert payload["artifacts"]["overlay_accepted.png"].endswith(
+                "/api/runs/download_run/files/overlay_accepted.png"
+            )
+            individual = client.get(
+                "/api/runs/download_run/files/overlay_accepted.png?download=1"
+            )
+            assert individual.status_code == 200
+            assert "attachment" in individual.headers["Content-Disposition"]
+
+            crop_bundle = client.get(payload["exports"]["candidate-crops"]["url"])
+            assert crop_bundle.status_code == 200
+            assert crop_bundle.mimetype == "application/zip"
+            assert "all_candidate_crops.zip" in crop_bundle.headers["Content-Disposition"]
+            with zipfile.ZipFile(io.BytesIO(crop_bundle.data)) as archive:
+                assert archive.read("candidate_crops/candidate_000001.tif") == b"raw"
+            latest_bundle = client.get("/api/runs/latest/exports/figures.zip")
+            assert latest_bundle.status_code == 200
+            assert latest_bundle.mimetype == "application/zip"
+            assert client.get("/api/runs/download_run/exports/not-a-kind.zip").status_code == 404
     finally:
         manager.shutdown()

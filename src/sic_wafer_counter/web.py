@@ -31,6 +31,7 @@ from werkzeug.utils import secure_filename
 from . import __version__
 from .image_io import ImageReadError
 from .pipeline import analyze_image
+from .result_export import EXPORT_BUNDLES, ResultExporter
 from .run_repository import RunRepository, RunRepositoryError, public_json
 from .utils import ConfigurationError, deep_merge, load_config, setup_logging
 from .wafer_detection import WaferDetectionError
@@ -332,8 +333,10 @@ def create_app(
     app.config["MAX_CONTENT_LENGTH"] = int(max_upload_mb) * 1024 * 1024
     manager = _JobManager(root, max_workers=max_workers)
     repository = RunRepository(manager.result_root)
+    exporter = ResultExporter(repository)
     app.extensions["sic_wafer_job_manager"] = manager
     app.extensions["sic_wafer_run_repository"] = repository
+    app.extensions["sic_wafer_result_exporter"] = exporter
 
     demo_sources = {
         kind: root / "sample_data" / "generated" / f"synthetic_{kind}.png"
@@ -488,6 +491,23 @@ def create_app(
         )
         return str((completed or runs[0])["run_id"])
 
+    def export_links(run_id: str, *, latest: bool = False) -> dict[str, dict[str, str]]:
+        """Return only currently available, server-generated ZIP exports."""
+
+        endpoint = "latest_run_export" if latest else "run_export"
+        links: dict[str, dict[str, str]] = {}
+        for kind, bundle in exporter.available(run_id).items():
+            route_values = {"bundle_kind": kind}
+            if not latest:
+                route_values["run_id"] = run_id
+            links[kind] = {
+                "url": url_for(endpoint, **route_values),
+                "filename": bundle.filename,
+                "label": bundle.label,
+                "description": bundle.description,
+            }
+        return links
+
     @app.get("/api/runs/latest")
     def latest_run_detail():
         """Expose a stable URL for the newest locally persisted result."""
@@ -501,6 +521,7 @@ def create_app(
             name: url_for("latest_run_file", relative_path=name)
             for name in detail.pop("artifact_names")
         }
+        detail["exports"] = export_links(run_id, latest=True)
         return jsonify(detail)
 
     @app.get("/api/runs/latest/files/<path:relative_path>")
@@ -513,6 +534,24 @@ def create_app(
             abort(404)
         return send_file(target, as_attachment=request.args.get("download") == "1")
 
+    @app.get("/api/runs/latest/exports/<bundle_kind>.zip")
+    def latest_run_export(bundle_kind: str):
+        """Build or serve a stable latest-result ZIP without loading it into memory."""
+
+        try:
+            run_id = latest_persisted_run_id()
+            target = exporter.archive(run_id, bundle_kind)
+            bundle = EXPORT_BUNDLES[bundle_kind]
+        except (KeyError, RunRepositoryError):
+            abort(404)
+        return send_file(
+            target,
+            as_attachment=True,
+            download_name=bundle.filename,
+            mimetype="application/zip",
+            conditional=True,
+        )
+
     @app.get("/api/runs/<run_id>")
     def run_detail(run_id: str):
         try:
@@ -523,6 +562,7 @@ def create_app(
             name: url_for("run_file", run_id=run_id, relative_path=name)
             for name in detail.pop("artifact_names")
         }
+        detail["exports"] = export_links(run_id)
         return jsonify(detail)
 
     @app.get("/api/runs/<run_id>/files/<path:relative_path>")
@@ -532,6 +572,23 @@ def create_app(
         except RunRepositoryError:
             abort(404)
         return send_file(target, as_attachment=request.args.get("download") == "1")
+
+    @app.get("/api/runs/<run_id>/exports/<bundle_kind>.zip")
+    def run_export(run_id: str, bundle_kind: str):
+        """Build or serve one run-scoped ZIP without buffering the archive in RAM."""
+
+        try:
+            target = exporter.archive(run_id, bundle_kind)
+            bundle = EXPORT_BUNDLES[bundle_kind]
+        except (KeyError, RunRepositoryError):
+            abort(404)
+        return send_file(
+            target,
+            as_attachment=True,
+            download_name=bundle.filename,
+            mimetype="application/zip",
+            conditional=True,
+        )
 
     @app.get("/api/runs/<run_id>/defects")
     def run_defects(run_id: str):

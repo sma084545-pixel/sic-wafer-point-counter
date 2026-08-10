@@ -16,6 +16,7 @@ const ARTIFACT_LABELS = {
   'angular_density.csv': '方位角密度 CSV',
   'regional_density.csv': '区域密度 CSV',
   'density_heatmap_grid.csv': '二维密度逐格审计 CSV',
+  'local_fields/00_global_overview.xlsx': '局部视场全局概览 Excel',
   'independent_reference_points.csv': '独立参考登记审计 CSV',
   'independent_reference_matches.csv': '自动候选与独立参考匹配 CSV',
   'run.log': '运行日志',
@@ -31,11 +32,19 @@ const IMAGE_LABELS = {
   'overlay_all_candidates.png': '全部候选叠加图',
   'density_heatmap.png': '实际有效面积归一化密度热图',
   'defect_size_histogram.png': '目标尺寸分布',
+  'equivalent_diameter_histogram.png': '等效直径分布',
+  'radial_density.png': '径向面积归一化密度',
+  'angular_density.png': '方位角面积归一化密度',
   'valid_analysis_mask.png': '最终有效分析掩膜',
   'wafer_mask.png': '完整晶圆掩膜',
   'preprocessed_preview.png': '暗目标响应预览',
   'candidate_mask.png': '候选二值掩膜',
 };
+
+function downloadUrl(url) {
+  if (!url) return '';
+  return `${url}${url.includes('?') ? '&' : '?'}download=1`;
+}
 
 function pick(object, ...paths) {
   for (const path of paths) {
@@ -254,12 +263,34 @@ export function renderRunDetail(detail) {
   updateResultImage(detail, select.value);
 
   const linkEntries = Object.entries(ARTIFACT_LABELS).filter(([name]) => artifacts[name]);
+  const imageLinkEntries = Object.entries(IMAGE_LABELS).filter(([name]) => artifacts[name]);
+  const exports = detail.exports || {};
+  const exportEntries = Object.values(exports).filter((item) => item?.url);
   const artifactPanel = document.querySelector('#artifact-panel');
-  artifactPanel.hidden = linkEntries.length === 0;
+  artifactPanel.hidden = linkEntries.length === 0 && imageLinkEntries.length === 0 && exportEntries.length === 0;
+  const bundlePanel = document.querySelector('#export-bundles');
+  bundlePanel.hidden = exportEntries.length === 0;
+  bundlePanel.innerHTML = exportEntries.map((item) => `<a class="export-bundle" href="${escapeHtml(item.url)}" download="${escapeHtml(item.filename || '')}"><strong>${escapeHtml(item.label || '批量导出 ZIP')}</strong><span>${escapeHtml(item.description || '')}</span></a>`).join('');
+
+  const imageGroup = document.querySelector('#image-download-group');
+  imageGroup.hidden = imageLinkEntries.length === 0;
+  document.querySelector('#image-download-links').innerHTML = imageLinkEntries.map(([name, label]) => `<a href="${escapeHtml(downloadUrl(artifacts[name]))}" download="${escapeHtml(name)}">${escapeHtml(label)}</a>`).join('');
+
+  const artifactGroup = document.querySelector('#artifact-download-group');
+  artifactGroup.hidden = linkEntries.length === 0;
   document.querySelector('#artifact-links').innerHTML = linkEntries.map(([name, label]) => {
-    const download = name === 'report.html' ? '' : '?download=1';
-    return `<a href="${escapeHtml(artifacts[name])}${download}" target="_blank" rel="noopener">${escapeHtml(label)}</a>`;
+    return `<a href="${escapeHtml(downloadUrl(artifacts[name]))}" download="${escapeHtml(name)}">${escapeHtml(label)}</a>`;
   }).join('');
+
+  const cropExport = exports['candidate-crops'];
+  const cropExportLink = document.querySelector('#candidate-crops-export');
+  cropExportLink.hidden = !cropExport?.url;
+  if (cropExport?.url) {
+    cropExportLink.href = cropExport.url;
+    cropExportLink.download = cropExport.filename || 'all_candidate_crops.zip';
+  } else {
+    cropExportLink.removeAttribute('href');
+  }
 
   const candidateBrowser = document.querySelector('#candidate-browser');
   candidateBrowser.hidden = !artifacts['defects_all.csv'] || failed;
@@ -275,16 +306,21 @@ export function updateResultImage(detail, name) {
   const missing = document.querySelector('#image-missing');
   const caption = document.querySelector('#image-caption');
   const url = detail?.artifacts?.[name];
+  const download = document.querySelector('#current-image-download');
   image.hidden = !url;
   missing.hidden = Boolean(url);
+  download.hidden = !url;
   if (url) {
     image.src = url;
     image.alt = `${detail.input_file_name || detail.run_id} 的${IMAGE_LABELS[name] || '分析图像'}`;
     caption.textContent = IMAGE_LABELS[name] || name;
+    download.href = downloadUrl(url);
+    download.download = name;
   } else {
     image.removeAttribute('src');
     image.alt = '';
     caption.textContent = '图像未保存';
+    download.removeAttribute('href');
   }
 }
 
@@ -309,6 +345,13 @@ function candidateValues(row) {
   };
 }
 
+function candidateCropMarkup(row, id, size) {
+  if (!row.crop_preview_url) return '<span aria-label="无裁剪图">—</span>';
+  const source = row.crop_url || row.crop_preview_url;
+  const filename = row.crop_url ? `candidate_${id}.tif` : `candidate_${id}_preview.png`;
+  return `<div class="candidate-crop-links"><a href="${escapeHtml(row.crop_preview_url)}" target="_blank" rel="noopener"><img loading="lazy" decoding="async" src="${escapeHtml(row.crop_preview_url)}" alt="候选 ${escapeHtml(id)} 局部裁剪" width="${size}" height="${size}"></a><a class="candidate-download" href="${escapeHtml(downloadUrl(source))}" download="${escapeHtml(filename)}">下载原图</a></div>`;
+}
+
 export function renderCandidatePage(payload) {
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const body = document.querySelector('#candidate-body');
@@ -319,16 +362,12 @@ export function renderCandidatePage(payload) {
   } else {
     body.innerHTML = rows.map((row) => {
       const value = candidateValues(row);
-      const thumbnail = row.crop_preview_url
-        ? `<a href="${escapeHtml(row.crop_url || row.crop_preview_url)}" target="_blank" rel="noopener"><img loading="lazy" decoding="async" src="${escapeHtml(row.crop_preview_url)}" alt="候选 ${escapeHtml(value.id)} 局部裁剪" width="40" height="40"></a>`
-        : '<span aria-label="无裁剪图">—</span>';
+      const thumbnail = candidateCropMarkup(row, value.id, 40);
       return `<tr><td>${escapeHtml(value.id)}</td><td>${thumbnail}</td><td>${value.x}</td><td>${value.y}</td><td>${value.diameter}</td><td>${value.circularity}</td><td>${value.contrast}</td><td>${value.boundary}</td><td>${candidateStatus(row)}</td><td>${escapeHtml(value.reason)}</td></tr>`;
     }).join('');
     cards.innerHTML = rows.map((row) => {
       const value = candidateValues(row);
-      const thumbnail = row.crop_preview_url
-        ? `<a href="${escapeHtml(row.crop_url || row.crop_preview_url)}" target="_blank" rel="noopener"><img loading="lazy" decoding="async" src="${escapeHtml(row.crop_preview_url)}" alt="候选 ${escapeHtml(value.id)} 局部裁剪" width="52" height="52"></a>`
-        : '<div aria-label="无裁剪图"></div>';
+      const thumbnail = candidateCropMarkup(row, value.id, 52);
       return `<article class="candidate-card">${thumbnail}<div><strong>#${escapeHtml(value.id)} · ${candidateStatus(row)}</strong><dl><div><dt>x / y</dt><dd>${value.x} / ${value.y} mm</dd></div><div><dt>直径</dt><dd>${value.diameter}</dd></div><div><dt>圆度</dt><dd>${value.circularity}</dd></div><div><dt>距边界</dt><dd>${value.boundary}</dd></div></dl><span class="subtext">${escapeHtml(value.reason)}</span></div></article>`;
     }).join('');
   }

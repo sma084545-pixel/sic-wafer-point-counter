@@ -28,6 +28,7 @@ RESULT_FILE_SUFFIXES = {
     ".tif",
     ".tiff",
     ".txt",
+    ".xlsx",
     ".yaml",
     ".yml",
 }
@@ -55,6 +56,7 @@ ARTIFACT_NAMES = (
     "angular_density.png",
     "density_heatmap.png",
     "density_heatmap_grid.csv",
+    "local_fields/00_global_overview.xlsx",
     "independent_reference_points.csv",
     "independent_reference_matches.csv",
     "radial_density.csv",

@@ -126,6 +126,11 @@ output:
   comparison_crop_half_size_px: 48
   save_candidate_crops: true
   crop_half_size_px: 32
+  # Local export follows the supplied XRT field convention: marked PNG,
+  # typed position XLSX and unchanged numeric TIFF for every valid 4 mm field.
+  generate_local_field_package: true
+  local_field_size_mm: 4.0
+  local_field_max_band_bytes: 134217728
 
 spatial:
   # The 2-D map reports count / actual valid-mask area in every cell.

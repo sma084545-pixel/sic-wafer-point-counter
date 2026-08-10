@@ -25,6 +25,7 @@ from jinja2 import BaseLoader, Environment, select_autoescape
 
 from . import __version__
 from .density import calculate_density
+from .local_field_export import export_local_fields
 from .paper_alignment import references_from_config
 from .validation import spatial_heterogeneity_indicator
 from .visualization import (
@@ -1140,6 +1141,7 @@ _REPORT_TEMPLATE = r"""<!doctype html>
     <li><a href="defects_accepted.csv">自动接受目标</a></li>
     <li><a href="defects_rejected.csv">自动拒绝目标</a></li>
     {% if candidate_crops_available %}<li><a href="candidate_crops/">原始数值 TIFF 候选裁剪及显示预览</a></li>{% endif %}
+    {% if local_field_export_available %}<li><a href="local_fields/00_global_overview.xlsx">局部视场全局 Excel 总表</a></li>{% endif %}
     <li><a href="analysis_config.yaml">本次实际参数</a></li>
     <li><a href="radial_density.csv">径向密度（有效面积归一化）</a></li>
     <li><a href="angular_density.csv">方位角密度（有效面积归一化）</a></li>
@@ -1309,6 +1311,7 @@ def generate_html_report(
         software_version=_summary_value(summary, "software_version", default=__version__),
         generated_at=_summary_value(summary, "generated_at_utc", default=""),
         candidate_crops_available=(folder / "candidate_crops").is_dir(),
+        local_field_export_available=(folder / "local_fields/00_global_overview.xlsx").is_file(),
         density_heatmap_grid_available=(folder / "density_heatmap_grid.csv").is_file(),
         independent_reference_available=(folder / "independent_reference_points.csv").is_file(),
     )
@@ -1402,6 +1405,71 @@ def write_analysis_outputs(
     if isinstance(summary, dict):
         summary["independent_reference"] = _json_safe(reference_summary)
         summary["paper_reference_alignment"] = paper_reference_alignment
+
+    if (
+        bool(output_config.get("generate_local_field_package", True))
+        and bool(output_config.get("save_candidate_crops", True))
+        and source_shape is not None
+    ):
+        center_value = _summary_value(canonical, "wafer_center_px", "wafer.center_px")
+        if isinstance(center_value, Mapping):
+            center_value = (center_value.get("x"), center_value.get("y"))
+        if not (isinstance(center_value, (list, tuple)) and len(center_value) >= 2):
+            center_value = (
+                _summary_value(canonical, "center_x_px", "wafer.center_x_px"),
+                _summary_value(canonical, "center_y_px", "wafer.center_y_px"),
+            )
+        scale_value = _summary_value(canonical, "mm_per_pixel", "wafer.mm_per_pixel")
+        raw_field_reader = None
+        display_field_reader = None
+        if crop_reader is not None:
+
+            def raw_field_reader(x0: int, y0: int, width: int, height: int) -> np.ndarray:
+                return crop_reader(x0, y0, x0 + width, y0 + height)
+
+        if comparison_crop_reader is not None:
+
+            def display_field_reader(x0: int, y0: int, width: int, height: int) -> np.ndarray:
+                return comparison_crop_reader(x0, y0, x0 + width, y0 + height)
+
+        if raw_field_reader is None and original_image is not None:
+            source_array = np.asarray(original_image)
+
+            def raw_field_reader(x0: int, y0: int, width: int, height: int) -> np.ndarray:
+                return source_array[y0 : y0 + height, x0 : x0 + width]
+
+        if display_field_reader is None:
+            display_field_reader = raw_field_reader
+        if (
+            raw_field_reader is not None
+            and display_field_reader is not None
+            and all(value is not None for value in center_value[:2])
+            and scale_value is not None
+        ):
+            local_fields = export_local_fields(
+                frame,
+                folder,
+                canonical,
+                source_shape=tuple(map(int, source_shape[:2])),
+                center_px=(float(center_value[0]), float(center_value[1])),
+                mm_per_pixel=float(scale_value),
+                valid_analysis_mask=valid_analysis_mask,
+                raw_reader=raw_field_reader,
+                display_reader=display_field_reader,
+                field_size_mm=float(output_config.get("local_field_size_mm", 4.0)),
+                max_band_bytes=int(
+                    output_config.get("local_field_max_band_bytes", 134_217_728)
+                ),
+            )
+            local_summary = local_fields.to_dict(folder)
+            canonical["local_field_export"] = local_summary
+            if isinstance(summary, dict):
+                summary["local_field_export"] = local_summary
+            outputs["local_field_overview"] = local_fields.global_workbook
+        else:
+            LOGGER.warning(
+                "Local-field package skipped: full-resolution reader and physical calibration are required"
+            )
     if registered_references is not None:
         outputs["independent_reference_points"] = folder / "independent_reference_points.csv"
         registered_references.all_rows.to_csv(

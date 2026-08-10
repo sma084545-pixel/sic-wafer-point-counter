@@ -210,9 +210,12 @@
           <div class="panel image-panel">
             <div class="panel-heading">
               <div><h2>晶圆图像与检测结果</h2><p id="image-caption">带编号的接受目标叠加图</p></div>
-              <label class="compact-control" for="image-artifact">显示图层
-                <select id="image-artifact"></select>
-              </label>
+              <div class="image-actions">
+                <label class="compact-control" for="image-artifact">显示图层
+                  <select id="image-artifact"></select>
+                </label>
+                <a id="current-image-download" class="button quiet" href="#" download hidden>下载当前图像</a>
+              </div>
             </div>
             <div class="wafer-viewer"><img id="result-image" alt="" width="1200" height="900" decoding="async"></div>
             <p id="image-missing" class="empty-state" hidden>该运行没有保存此图像。</p>
@@ -226,14 +229,25 @@
         </section>
 
         <section class="panel artifact-panel" id="artifact-panel" hidden>
-          <div class="panel-heading"><div><h2>报告与可复核文件</h2><p>文件来自本次独立结果目录</p></div></div>
-          <div id="artifact-links" class="artifact-links"></div>
+          <div class="panel-heading"><div><h2>独立与批量导出</h2><p>所有文件只来自本次运行；批量包不包含输入原图</p></div></div>
+          <div id="export-bundles" class="export-bundles" aria-label="批量导出"></div>
+          <div class="artifact-group" id="image-download-group">
+            <h3>分析图像（逐项原文件导出）</h3>
+            <div id="image-download-links" class="artifact-links"></div>
+          </div>
+          <div class="artifact-group" id="artifact-download-group">
+            <h3>报告、数据与审计文件（逐项导出）</h3>
+            <div id="artifact-links" class="artifact-links"></div>
+          </div>
         </section>
 
         <section class="panel candidate-browser" id="candidate-browser" hidden aria-labelledby="candidate-title">
           <div class="panel-heading">
             <div><h2 id="candidate-title">候选浏览器</h2><p>服务端分页读取 defects_all.csv，不把整表载入浏览器</p></div>
-            <span id="candidate-total" class="count-label">—</span>
+            <div class="candidate-heading-actions">
+              <span id="candidate-total" class="count-label">—</span>
+              <a id="candidate-crops-export" class="button secondary" href="#" download hidden>一次导出全部局部分析包 ZIP</a>
+            </div>
           </div>
           <form id="candidate-filters" class="filter-bar" autocomplete="off">
             <label for="candidate-status">状态<select id="candidate-status" name="status"><option value="all">全部</option><option value="accepted">已接受</option><option value="rejected">已拒绝</option></select></label>
