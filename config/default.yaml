@@ -105,6 +105,14 @@ filters:
   min_valid_fraction: 0.95
   local_background_ring_px: 5
 
+# Optional supervised post-classifier. The local browser training workspace
+# supplies a portable JSON model inline for a run. Disabled means the existing
+# transparent morphology/contrast rules remain the final decision.
+classifier:
+  enabled: false
+  model_path:
+  model:
+
 output:
   save_intermediates: true
   draw_labels: true

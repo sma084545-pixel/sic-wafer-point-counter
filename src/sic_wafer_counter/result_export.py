@@ -276,7 +276,7 @@ class ResultExporter:
                     "SiC 晶圆点状目标分析导出包\n"
                     "文件来自单次运行目录；未重新缩放或改变科研图像内容。\n"
                     "candidate-crops 包含全部候选（接受与拒绝），判定见 index/defects_all.csv。\n"
-                    "自动识别的是满足当前图像规则的点状目标，不等同于已物理确认的位错。\n"
+                    "自动识别的是满足最终图像判定（透明规则或已记录训练分类器）的点状目标，不等同于已物理确认的位错。\n"
                 ),
                 compress_type=zipfile.ZIP_STORED,
             )

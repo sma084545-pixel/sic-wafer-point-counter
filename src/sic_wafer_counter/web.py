@@ -33,6 +33,7 @@ from .image_io import ImageReadError
 from .pipeline import analyze_image
 from .result_export import EXPORT_BUNDLES, ResultExporter
 from .run_repository import RunRepository, RunRepositoryError, public_json
+from .training_repository import TrainingRepository, TrainingRepositoryError
 from .utils import ConfigurationError, deep_merge, load_config, setup_logging
 from .wafer_detection import WaferDetectionError
 
@@ -221,6 +222,7 @@ class _JobManager:
             artifact_names = (
                 "report.html", "summary.json", "defects_all.csv", "defects_accepted.csv",
                 "defects_rejected.csv", "overlay_accepted.png", "overlay_all_candidates.png",
+                "candidate_classifier.json",
                 "overlay_xrt_red_boxes.png", "xrt_detection_detail_montage.png",
                 "paper_detection_field.png", "paper_aligned_result_figure.png",
                 "defect_comparison_details.png",
@@ -334,9 +336,11 @@ def create_app(
     manager = _JobManager(root, max_workers=max_workers)
     repository = RunRepository(manager.result_root)
     exporter = ResultExporter(repository)
+    training = TrainingRepository(root, repository)
     app.extensions["sic_wafer_job_manager"] = manager
     app.extensions["sic_wafer_run_repository"] = repository
     app.extensions["sic_wafer_result_exporter"] = exporter
+    app.extensions["sic_wafer_training_repository"] = training
 
     demo_sources = {
         kind: root / "sample_data" / "generated" / f"synthetic_{kind}.png"
@@ -417,6 +421,17 @@ def create_app(
             config, manual = _analysis_config_from_form(request.form)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        if request.form.get("use_trained_classifier") == "true":
+            try:
+                model = training.active_model()
+            except TrainingRepositoryError as exc:
+                return jsonify({"error": str(exc)}), 400
+            if model is None:
+                return jsonify({"error": "尚未训练可用的候选分类器"}), 400
+            config = deep_merge(
+                config,
+                {"classifier": {"enabled": True, "model_path": None, "model": model}},
+            )
         upload_id = uuid4().hex
         upload_dir = manager.upload_root / upload_id
         upload_dir.mkdir(parents=True, exist_ok=False)
@@ -603,6 +618,7 @@ def create_app(
                 page=page,
                 page_size=page_size,
             )
+            training_labels = training.labels_for_run(run_id)
         except (RunRepositoryError, ValueError) as exc:
             return jsonify({"error": str(exc)}), 400
         rows: list[dict[str, Any]] = []
@@ -616,6 +632,7 @@ def create_app(
             item["crop_url"] = (
                 url_for("run_file", run_id=run_id, relative_path=crop) if crop else None
             )
+            item["training_label"] = training_labels.get(str(item.get("defect_id", "")))
             rows.append(item)
         return jsonify({
             "run_id": run_id,
@@ -626,6 +643,82 @@ def create_app(
             "total_pages": candidates.total_pages,
             "reason_counts": candidates.reason_counts,
         })
+
+    @app.get("/api/training")
+    def training_status():
+        """Summarize local labels and the active portable classifier."""
+
+        try:
+            return jsonify(public_json(training.status()))
+        except TrainingRepositoryError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/training/labels")
+    def save_training_label():
+        """Persist one explicit expert candidate label."""
+
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "请求必须包含 JSON 标注对象"}), 400
+        try:
+            saved = training.save_annotation(
+                run_id=str(payload.get("run_id", "")),
+                defect_id=str(payload.get("defect_id", "")),
+                label=str(payload.get("label", "")),
+                split=str(payload.get("split", "calibration")),
+                reviewer_id=str(payload.get("reviewer_id", "local_expert")),
+                notes=str(payload.get("notes", "")),
+            )
+            return jsonify({"annotation": saved, "training": training.status()})
+        except (TrainingRepositoryError, RunRepositoryError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/training/train")
+    def train_candidate_model():
+        """Train from consensus calibration labels and activate atomically."""
+
+        payload = request.get_json(silent=True)
+        values = payload if isinstance(payload, Mapping) else {}
+        try:
+            accept_threshold = float(values.get("accept_threshold", 0.75))
+            reject_threshold = float(values.get("reject_threshold", 0.25))
+            regularization = float(values.get("regularization", 1.0))
+            model = training.train(
+                accept_threshold=accept_threshold,
+                reject_threshold=reject_threshold,
+                regularization=regularization,
+            )
+            return jsonify({
+                "training": training.status(),
+                "model": public_json(model),
+            })
+        except (TypeError, ValueError, TrainingRepositoryError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get("/api/training/model")
+    def download_candidate_model():
+        try:
+            if training.active_model() is None:
+                abort(404)
+        except TrainingRepositoryError:
+            abort(404)
+        return send_file(
+            training.model_path,
+            as_attachment=True,
+            download_name="candidate_classifier.json",
+            mimetype="application/json",
+            conditional=True,
+        )
+
+    @app.get("/api/training/annotations")
+    def download_candidate_annotations():
+        return send_file(
+            training.annotations_path,
+            as_attachment=True,
+            download_name="candidate_annotations.csv",
+            mimetype="text/csv",
+            conditional=True,
+        )
 
     return app
 

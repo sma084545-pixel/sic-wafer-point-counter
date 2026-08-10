@@ -8,8 +8,8 @@
   <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
   <title>浏览器分析｜SiC 晶圆点状目标平台</title>
   <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="assets/analyze.css?v=20260807a">
-  <script type="module" src="assets/analyze.js?v=20260808c"></script>
+  <link rel="stylesheet" href="assets/analyze.css?v=20260810a">
+  <script type="module" src="assets/analyze.js?v=20260810a"></script>
 </head>
 <body>
   <a class="skip-link" href="#content">跳到主要内容</a>
@@ -68,6 +68,11 @@
             <label><span>候选阈值</span><select id="threshold-method"><option value="otsu">多类 Otsu（默认）</option><option value="adaptive">自适应阈值</option><option value="quantile">响应分位数</option></select></label>
             <label class="check-field"><input id="watershed" type="checkbox" checked><span>分水岭分离粘连点</span></label>
           </div>
+          <label class="classifier-file" for="classifier-file">
+            <span>可选：导入本机工作台训练的分类器 JSON</span>
+            <input id="classifier-file" type="file" accept=".json,application/json">
+            <small id="classifier-line" aria-live="polite">未导入模型；本次将使用透明形态与对比度规则。</small>
+          </label>
         </fieldset>
 
         <details class="manual-details">
@@ -142,7 +147,7 @@
 
     <section class="local-fallback shell" aria-labelledby="large-title">
       <h2 id="large-title">超过网页安全清单的 TIFF / BigTIFF 请使用本机工作台</h2>
-      <p>网页允许选择最高 100 MiB，但仍会按格式、源像素、单边尺寸、有界随机访问能力和输出包大小逐层预检。任一条件不满足都会明确停止，不会静默压缩、降采样或展示不可靠密度。GitHub 下载的本机工作台另提供逐项原文件下载及“全部局部分析包”：首项为全局 Excel，总表之后按每个有效 4 mm 视场保存标记 PNG、位置 Excel 和原始数值 TIFF。该大体量导出不会在静态网页内伪装生成。</p>
+      <p>网页允许选择最高 100 MiB，但仍会按格式、源像素、单边尺寸、有界随机访问能力和输出包大小逐层预检。任一条件不满足都会明确停止，不会静默压缩、降采样或展示不可靠密度。GitHub 下载的本机工作台提供专家候选标注与训练窗口；训练得到的 JSON 可回传本页复用。它还提供逐项原文件下载及“全部局部分析包”：首项为全局 Excel，总表之后按每个有效 4 mm 视场保存标记 PNG、位置 Excel 和原始数值 TIFF。该大体量导出不会在静态网页内伪装生成。</p>
       <a href="https://github.com/sma084545-pixel/sic-wafer-point-counter#readme">查看本机安装与运行说明 <span aria-hidden="true">→</span></a>
     </section>
   </main>

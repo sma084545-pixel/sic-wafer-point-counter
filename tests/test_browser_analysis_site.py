@@ -45,7 +45,7 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
 
     assert parser.h1_count == 1
     assert parser.form_count == 1
-    assert {"image-file", "diameter", "edge-exclusion", "watershed"} <= set(parser.inputs)
+    assert {"image-file", "classifier-file", "diameter", "edge-exclusion", "watershed"} <= set(parser.inputs)
     assert "原始 <code>File</code> 以只读方式挂载" in html
     assert "不在主线程整体读取，也不上传到网站服务器" in html
     assert "选择上限 100 MiB" in html
@@ -61,7 +61,8 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
     assert "整片密度热图" in html
     assert "未经材料专家标注或独立实验确认" in html
     assert "下载完整结果 ZIP" in html
-    assert parser.scripts == ["assets/analyze.js?v=20260808c"]
+    assert "本机工作台训练的分类器 JSON" in html
+    assert parser.scripts == ["assets/analyze.js?v=20260810a"]
     assert (DOCS / "assets" / "demo" / "synthetic_clean.png").is_file()
 
 
@@ -75,6 +76,7 @@ def test_worker_calls_packaged_pipeline_and_keeps_browser_limits_explicit() -> N
     assert 'config["output"]["generate_heatmap"] = True' in worker
     assert 'config["output"]["generate_paper_aligned_figure"] = True' in worker
     assert 'config["output"]["save_candidate_crops"] = False' in worker
+    assert 'config["classifier"]["model"] = classifier_model' in worker
     assert "analysis_quantized_to_uint8" not in worker or '"candidate_crops_saved": False' in worker
     assert "jsdelivr.net/pyodide/v${version}/full/" in worker
     assert "fetchVerifiedWheel" in worker and 'crypto.subtle.digest("SHA-256"' in worker
@@ -86,6 +88,7 @@ def test_browser_transfers_file_directly_and_worker_mounts_it_read_only() -> Non
     worker = (DOCS / "assets" / "analysis-worker.mjs").read_text(encoding="utf-8")
 
     assert "worker.postMessage({ type: \"analyze\", file: runFile, options })" in main
+    assert "classifier_model: await readClassifierModel()" in main
     assert ".arrayBuffer(" not in main
     assert "fileBuffer" not in main
     assert "WORKERFS" in worker
@@ -167,7 +170,7 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
 
     project_wheel = runtime / manifest["package_wheel"]["file"]
-    assert project_wheel.name == "sic_wafer_point_counter-0.2.5-py3-none-any.whl"
+    assert project_wheel.name == "sic_wafer_point_counter-0.3.0-py3-none-any.whl"
     with zipfile.ZipFile(project_wheel) as archive:
         packaged_names = set(archive.namelist())
         packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")
@@ -179,6 +182,7 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
             "sic_wafer_counter/resources/default.yaml"
         ).decode("utf-8")
     assert {
+        "sic_wafer_counter/candidate_classifier.py",
         "sic_wafer_counter/local_field_export.py",
         "sic_wafer_counter/result_export.py",
         "sic_wafer_counter/xlsx_export.py",

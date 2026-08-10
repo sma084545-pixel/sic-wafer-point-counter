@@ -34,6 +34,12 @@ CANDIDATE_COLUMNS = (
     "local_y_px",
     "accepted",
     "rejection_reason",
+    "rule_accepted",
+    "rule_rejection_reason",
+    "classifier_applied",
+    "classifier_probability",
+    "classifier_decision",
+    "decision_basis",
     "area_px",
     "area_mm2",
     "equivalent_diameter_um",
@@ -71,7 +77,7 @@ class LocalFieldExportResult:
             "mask_area_cm2": self.mask_area_cm2,
             "primary_area_relative_error": self.primary_area_relative_error,
             "field_outputs": ["01_marked.png", "02_positions.xlsx", "03_raw_original.tif"],
-            "automatic_marker_semantics": "red=accepted image-rule candidate; green=rejected",
+            "automatic_marker_semantics": "red=final accepted image candidate; green=final rejected",
             "physical_identity_claim": False,
         }
 
@@ -238,7 +244,7 @@ def _marked_field(
     font = cv2.FONT_HERSHEY_SIMPLEX
     cv2.putText(
         canvas,
-        "RED accepted | GREEN rejected | image rules",
+        "RED accepted | GREEN rejected | final image decision",
         (left, 25),
         font,
         0.38,
@@ -274,16 +280,17 @@ def _field_workbook(
 ) -> Path:
     summary_rows = [
         ["局部视场分析汇总", field["field_id"], None],
-        ["标记说明", "红框=自动接受；绿框/叉=自动拒绝", SCIENTIFIC_NOTE],
+        ["标记说明", "红框=最终接受；绿框/叉=最终拒绝", SCIENTIFIC_NOTE],
         [None, None, None],
         ["指标", "值", "单位/说明"],
         ["视场中心 X", field["center_x_mm"], "mm"],
         ["视场中心 Y", field["center_y_mm"], "mm"],
         ["左/右边界", f'{field["x_left_mm"]:.4f} / {field["x_right_mm"]:.4f}', "mm"],
         ["下/上边界", f'{field["y_bottom_mm"]:.4f} / {field["y_top_mm"]:.4f}', "mm"],
-        ["最终有效掩膜面积", field.get("valid_area_cm2"), "cm^-2 计算所用面积为 cm^2"],
-        ["自动接受数量", field["accepted_count"], "当前图像规则"],
-        ["自动拒绝数量", field["rejected_count"], "保留拒绝原因"],
+        ["最终有效掩膜面积", field.get("valid_area_cm2"), "cm^2；密度计算分母"],
+        ["最终接受数量", field["accepted_count"], "见最终判定依据"],
+        ["最终拒绝数量", field["rejected_count"], "保留规则与最终拒绝原因"],
+        ["最终判定依据", field.get("decision_basis", "见候选位置表"), "规则或训练分类器"],
         ["点状目标密度", field.get("density_cm2"), "cm^-2；非物理类别确认"],
         ["原始数值图", "03_raw_original.tif", "未改写像素值"],
         ["标记图", "01_marked.png", "红=接受；绿=拒绝"],
@@ -303,10 +310,10 @@ def _field_workbook(
             SheetSpec(
                 "候选位置",
                 rows=lambda rows=candidate_rows: iter(rows),
-                column_widths=(18, 12, 14, 14, 13, 13, 12, 26, 12, 13, 18, 18, 18, 13, 13, 13, 13, 13, 22),
+                column_widths=(18, 12, 14, 14, 13, 13, 12, 26, 12, 12, 14, 26, 14, 16, 18, 20, 12, 13, 18, 18, 18, 13, 13, 13, 13),
                 header_rows=frozenset({1}),
                 freeze_rows=1,
-                auto_filter_ref=f"A1:S{max(1, len(candidate_rows))}",
+                auto_filter_ref=f"A1:{_excel_column(len(CANDIDATE_COLUMNS) - 1)}{max(1, len(candidate_rows))}",
             ),
         ],
     )
@@ -326,14 +333,22 @@ def _global_workbook(
 ) -> Path:
     overview_rows = [
         ["SiC 晶圆点状目标分析：全局概览", None, None],
-        ["标记说明", "红框=自动接受；绿框/叉=自动拒绝", SCIENTIFIC_NOTE],
+        ["标记说明", "红框=最终接受；绿框/叉=最终拒绝", SCIENTIFIC_NOTE],
         [None, None, None],
         ["指标", "值", "单位/说明"],
         ["输入文件", summary.get("input_file_name"), ""],
         ["晶圆实际直径", summary.get("wafer_diameter_mm"), "mm"],
         ["最终有效分析面积 S", summary.get("valid_analysis_area_cm2"), "cm^2"],
-        ["自动接受数量 n", summary.get("accepted_count"), "当前图像规则"],
-        ["自动拒绝数量", summary.get("rejected_count"), "保留拒绝原因"],
+        ["最终接受数量 n", summary.get("accepted_count"), "见最终判定依据"],
+        ["最终拒绝数量", summary.get("rejected_count"), "保留规则与最终拒绝原因"],
+        ["最终判定依据", summary.get("decision_basis"), "规则或训练分类器"],
+        [
+            "分类器模型 SHA-256",
+            (summary.get("candidate_classifier") or {}).get("model_sha256")
+            if isinstance(summary.get("candidate_classifier"), Mapping)
+            else None,
+            "仅在启用训练分类器时提供",
+        ],
         ["整片点状目标密度 rho", summary.get("point_density_cm2"), "cm^-2；rho=n/S"],
         ["泊松计数不确定度", summary.get("counting_uncertainty_cm2"), "cm^-2；不含系统误差"],
         ["局部视场边长", field_size_mm, "mm"],
@@ -410,10 +425,10 @@ def _global_workbook(
             SheetSpec(
                 "全部候选位置",
                 rows=lambda rows=candidate_rows: iter(rows),
-                column_widths=(18, 12, 14, 14, 13, 13, 12, 26, 12, 13, 18, 18, 18, 13, 13, 13, 13, 13, 22),
+                column_widths=(18, 12, 14, 14, 13, 13, 12, 26, 12, 12, 14, 26, 14, 16, 18, 20, 12, 13, 18, 18, 18, 13, 13, 13, 13),
                 header_rows=frozenset({1}),
                 freeze_rows=1,
-                auto_filter_ref=f"A1:S{max(1, len(candidate_rows))}",
+                auto_filter_ref=f"A1:{_excel_column(len(CANDIDATE_COLUMNS) - 1)}{max(1, len(candidate_rows))}",
             ),
         ],
     )
@@ -551,6 +566,7 @@ def export_local_fields(
                 "rejected_count": rejected_count,
                 "candidate_count": int(len(candidates)),
                 "density_cm2": density,
+                "decision_basis": summary.get("decision_basis", "configured_image_rules"),
                 "output_folder": str(field_dir.relative_to(Path(output_dir))),
             }
             fields.append(record)

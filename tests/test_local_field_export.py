@@ -33,6 +33,12 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
                 "bounding_box": json.dumps([37, 37, 44, 44]),
                 "accepted": True,
                 "rejection_reason": "",
+                "rule_accepted": False,
+                "rule_rejection_reason": "too_elongated",
+                "classifier_applied": True,
+                "classifier_probability": 0.91,
+                "classifier_decision": "target",
+                "decision_basis": "trained_candidate_classifier",
                 "area_px": 20,
                 "equivalent_diameter_um": 5000.0,
             },
@@ -44,7 +50,13 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
                 "y_mm": -10.0,
                 "bounding_box": json.dumps([57, 57, 64, 64]),
                 "accepted": False,
-                "rejection_reason": "too_elongated",
+                "rejection_reason": "classifier_artifact",
+                "rule_accepted": True,
+                "rule_rejection_reason": "",
+                "classifier_applied": True,
+                "classifier_probability": 0.08,
+                "classifier_decision": "artifact",
+                "decision_basis": "trained_candidate_classifier",
                 "area_px": 22,
                 "equivalent_diameter_um": 5200.0,
             },
@@ -69,6 +81,8 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
             "rejected_count": 1,
             "point_density_cm2": 1.0 / valid_area,
             "counting_uncertainty_cm2": 1.0 / valid_area,
+            "decision_basis": "trained_candidate_classifier",
+            "candidate_classifier": {"model_sha256": "a" * 64},
             "real_annotation_validation_status": "not validated on real SiC data",
             "software_version": "test",
         },
@@ -96,6 +110,8 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
         assert "全部候选位置" in workbook_xml
         overview_xml = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
         assert "最终有效分析面积 S" in overview_xml
+        assert "trained_candidate_classifier" in overview_xml
+        assert "分类器模型 SHA-256" in overview_xml
         assert "未提供独立 DIC/KOH" in overview_xml
 
     field_dirs = sorted(path for path in (tmp_path / "local_fields").iterdir() if path.is_dir())
@@ -111,6 +127,12 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
     assert green_pixels > 10
 
     candidate_one_field = next(folder for folder in field_dirs if "X_-12.500_Y_12.500" in folder.name)
+    with zipfile.ZipFile(candidate_one_field / "02_positions.xlsx") as workbook:
+        field_overview = workbook.read("xl/worksheets/sheet1.xml").decode("utf-8")
+        candidate_sheet = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
+        assert "trained_candidate_classifier" in field_overview
+        assert "classifier_probability" in candidate_sheet
+        assert "rule_rejection_reason" in candidate_sheet
     raw = tifffile.imread(candidate_one_field / "03_raw_original.tif")
     assert np.array_equal(raw, source[25:50, 25:50])
 

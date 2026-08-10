@@ -67,6 +67,9 @@ input[type="number"], select { width: 100%; min-height: 46px; padding: 9px 11px;
 .check-field { min-height: 46px; display: flex; align-items: center; gap: 10px; padding-top: 26px; }
 .check-field input { width: 20px; height: 20px; accent-color: var(--teal); }
 .check-field span { margin: 0; color: var(--ink); }
+.classifier-file { display: grid; gap: 7px; margin-top: 18px; padding-top: 17px; border-top: 1px solid var(--line); }
+.classifier-file input[type="file"] { width: 100%; padding: 10px; border: 1px solid #b9c8c7; border-radius: 8px; background: white; }
+.classifier-file small { color: var(--muted); font-weight: 500; }
 .manual-details { margin-top: 16px; padding: 15px 18px; border: 1px solid var(--line); border-radius: 10px; }
 .manual-details summary { cursor: pointer; font-weight: 700; }
 .manual-details p { color: var(--muted); font-size: .85rem; }

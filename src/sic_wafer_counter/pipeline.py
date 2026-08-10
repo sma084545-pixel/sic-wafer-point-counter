@@ -18,6 +18,7 @@ from skimage.measure import label as connected_label
 from skimage.measure import regionprops
 
 from . import __version__
+from .candidate_classifier import apply_candidate_classifier, model_from_config
 from .density import COUNTING_UNCERTAINTY_NOTE, DensityResult, calculate_density
 from .feature_extraction import (
     DEFECT_COLUMNS,
@@ -803,6 +804,17 @@ def analyze_image(
             output_image = image_data.require_full()
             output_masks = full_masks
 
+        classifier_model = model_from_config(analysis_config)
+        classifier_warnings: list[str] = []
+        if classifier_model is None:
+            classifier_report: dict[str, Any] = {
+                "status": "disabled",
+                "physical_identity_validated": False,
+            }
+        else:
+            detected.frame, classifier_report, classifier_warnings = (
+                apply_candidate_classifier(detected.frame, classifier_model)
+            )
         accepted_count = int(detected.frame["accepted"].sum()) if not detected.frame.empty else 0
         density: DensityResult = calculate_density(accepted_count, area.valid_area_cm2)
         reference_profile, reference_warnings = _reference_profile_report(
@@ -815,6 +827,7 @@ def analyze_image(
             + list(physical_resolution.warnings)
             + detected.warnings
             + reference_warnings
+            + classifier_warnings
         ))
         summary: dict[str, Any] = {
             "status": "completed",
@@ -856,6 +869,12 @@ def analyze_image(
             "detection_threshold_value": detected.threshold_value,
             "accepted_count": accepted_count,
             "rejected_count": int(len(detected.frame) - accepted_count),
+            "decision_basis": (
+                "trained_candidate_classifier"
+                if classifier_model is not None
+                else "configured_image_rules"
+            ),
+            "candidate_classifier": classifier_report,
             "point_density_cm2": density.density_cm2,
             "density_unit": "cm^-2",
             "counting_uncertainty_cm2": density.standard_uncertainty_cm2,
@@ -875,7 +894,11 @@ def analyze_image(
             "reference_morphology_profile": reference_profile,
             "uncertainty_budget_summary": {
                 "counting": "Poisson/Garwood interval reported",
-                "classification": "not quantified: no real SiC expert-label validation",
+                "classification": (
+                    str(classifier_report.get("validation_status"))
+                    if classifier_model is not None
+                    else "not quantified: no real SiC expert-label validation"
+                ),
                 "parameter_sensitivity": "not quantified: no calibration-wafer sensitivity run",
                 "area_calibration": "not quantified: no diameter/pixel/mask-boundary uncertainty supplied",
                 "spatial_heterogeneity": "descriptive spatial outputs only; no multi-wafer inference",
@@ -915,6 +938,12 @@ def analyze_image(
             crop_reader=crop_reader,
             comparison_crop_reader=comparison_crop_reader,
         )
+        if classifier_model is not None:
+            output_files["candidate_classifier"] = atomic_write_json(
+                folder / "candidate_classifier.json",
+                classifier_model,
+                sort_keys=True,
+            )
         output_files["resolved_physical_parameters"] = resolved_parameters_path
         # Include report/PNG/CSV generation in the stated wall-clock runtime,
         # then refresh the two summary files and HTML headline deterministically.

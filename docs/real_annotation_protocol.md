@@ -8,6 +8,14 @@
 
 所有校准、验证与锁定测试拆分以 `wafer_id` 为最小单位。同一晶圆的不同 patch 不能跨集合。锁定测试晶圆不得用于调阈值、选择特征或选择最优 F1。参数敏感性分析只能在校准晶圆上对少量关键参数做预先规定的 ±20% 局部扰动。
 
+## 本机候选训练窗口
+
+本机工作台结果页允许对程序已经提出的候选标记 `target`、`artifact` 或 `uncertain`，并选择 `calibration`、`validation` 或 `locked_test`。原始记录写入 `training/candidate_annotations.csv`，同时快照保存候选特征、结果文件 SHA-256、标注者、拆分和时间；模型写入 `training/candidate_classifier.json`。同一候选出现多标注者冲突、任何不确定标签或拆分冲突时，不进入训练。
+
+候选模型使用物理尺度下的尺寸、形态和对比度特征，不使用候选在晶圆上的坐标，避免把采样位置误学成目标身份。至少需要 5 个目标和 5 个伪影校准标签；同一 `wafer_id` 跨集合会停止训练。概率大于等于接受阈值才计入 `n`，小于等于拒绝阈值判为伪影，中间区间明确列为不确定并排除。`outside_valid_mask` 和 `near_wafer_edge` 始终属于硬拒绝，模型不能覆盖。
+
+训练拟合指标不能当作真实准确率。只有独立 `validation` 或 `locked_test` 同时含正负类时，模型文件才附带留出指标；这些指标仍只验证“专家图像候选标签”，不构成 TSD、TED 或 BPD 的物理身份确认。模型 JSON 带内容 SHA-256，可下载后导入 GitHub Pages 浏览器分析页复用；每次应用都会把模型哈希、阈值、概率、规则判定和最终判定写入结果。
+
 验证匹配优先使用毫米坐标和 `matching_tolerance_um`。报告 TP、FP、FN、precision、recall、F1、每 cm² 的 FP/FN、自动与人工的 n/rho 差值以及 Bland–Altman 表。若标注覆盖并不完整，未匹配自动目标标为不确定，precision/F1 不应作为完整性能声明。
 
 标注中的 `source_image_sha256` 在原图仍可访问时会自动核验；哈希不一致或同一图存在互相冲突的声明哈希会停止验证。原图已归档或不可访问时报告 `source_file_unavailable_for_verification`，不能把它当作已核验。

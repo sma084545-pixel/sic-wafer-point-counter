@@ -11,3 +11,5 @@ web_uploads/
 sample_data/generated/
 output/
 .playwright-cli/
+training/
+tmp/

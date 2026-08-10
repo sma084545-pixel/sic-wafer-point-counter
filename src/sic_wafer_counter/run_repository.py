@@ -36,6 +36,7 @@ ARTIFACT_NAMES = (
     "report.html",
     "summary.json",
     "summary.csv",
+    "candidate_classifier.json",
     "defects_all.csv",
     "defects_accepted.csv",
     "defects_rejected.csv",

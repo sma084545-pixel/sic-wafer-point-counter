@@ -2,8 +2,8 @@
   "runtime_schema_version": 2,
   "pyodide_version": "314.0.4",
   "package_wheel": {
-    "file": "sic_wafer_point_counter-0.2.5-py3-none-any.whl",
-    "sha256": "ec9577e1efa4bc1e6b4cb561d9dee350ad06646a661758c3346e330f3e2060bf"
+    "file": "sic_wafer_point_counter-0.3.0-py3-none-any.whl",
+    "sha256": "6b19cda192e51627cf46c6f107e39c74de2ccf4b89b343a3582d3cb6f4cceddb"
   },
   "tifffile_wheel": {
     "file": "tifffile-2025.5.10-py3-none-any.whl",

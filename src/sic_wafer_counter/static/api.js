@@ -32,6 +32,17 @@ export const api = {
     });
     return requestJson(`/api/runs/${encodeURIComponent(runId)}/defects?${params}`);
   },
+  getTraining: () => requestJson('/api/training'),
+  saveTrainingLabel: (payload) => requestJson('/api/training/labels', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  }),
+  trainClassifier: (payload) => requestJson('/api/training/train', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  }),
   submitAnalysis: (formData) => requestJson('/api/jobs', {method: 'POST', body: formData}),
   submitDemo: (kind) => requestJson(`/api/demo/${encodeURIComponent(kind)}`, {method: 'POST'}),
   getJob: (jobId) => requestJson(`/api/jobs/${encodeURIComponent(jobId)}`),

@@ -423,6 +423,11 @@ config["output"]["generate_xrt_detection_detail_montage"] = True
 config["output"]["generate_heatmap"] = True
 config["output"]["generate_paper_aligned_figure"] = True
 config["io"]["max_overlay_size"] = int(options["max_overlay_size_px"])
+classifier_model = options.get("classifier_model")
+if classifier_model is not None:
+    config["classifier"]["enabled"] = True
+    config["classifier"]["model_path"] = None
+    config["classifier"]["model"] = classifier_model
 
 is_tiff = bool(options["source_metadata"]["is_tiff"])
 if is_tiff:
@@ -457,6 +462,8 @@ summary["browser_runtime"] = {
     "input_transport": options["input_transport"],
     "uploaded_to_server": False,
     "candidate_crops_saved": False,
+    "candidate_classifier_supplied": classifier_model is not None,
+    "candidate_classifier_model_sha256": summary.get("candidate_classifier", {}).get("model_sha256"),
     "limit_tier": options["limit_tier"],
     "source_axes": options["source_metadata"]["axes"],
     "source_shape": options["source_metadata"]["shape"],

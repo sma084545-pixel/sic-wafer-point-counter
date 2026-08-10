@@ -4,6 +4,7 @@ import {
   renderLatestRun, renderRunDetail, renderRunIndex, renderRunIndexError,
   updateResultImage,
 } from './results.js';
+import {escapeHtml} from './format.js';
 
 const state = {
   runs: [],
@@ -11,6 +12,7 @@ const state = {
   currentRunToken: 0,
   candidates: {page: 1, totalPages: 1},
   jobActive: false,
+  training: null,
 };
 
 const elements = {
@@ -27,6 +29,12 @@ const elements = {
   sidebar: document.querySelector('#sidebar'),
   menuButton: document.querySelector('#mobile-menu-button'),
   candidateFilters: document.querySelector('#candidate-filters'),
+  trainingForm: document.querySelector('#training-form'),
+  trainingStatus: document.querySelector('#training-status'),
+  trainingError: document.querySelector('#training-error'),
+  trainingModelDownload: document.querySelector('#training-model-download'),
+  useTrainedClassifier: document.querySelector('#use-trained-classifier'),
+  analysisClassifierStatus: document.querySelector('#analysis-classifier-status'),
 };
 
 function announce(message) {
@@ -79,18 +87,57 @@ function setActiveNavigation(active) {
 }
 
 function showView(name) {
-  const allowed = ['overview', 'analyze', 'runs', 'result', 'methods'];
+  const allowed = ['overview', 'analyze', 'runs', 'training', 'result', 'methods'];
   const target = allowed.includes(name) ? name : 'overview';
   document.querySelectorAll('[data-view]').forEach((view) => {
     view.hidden = view.dataset.view !== target;
   });
   setActiveNavigation(target);
-  const labels = {overview: '总览', analyze: '新建分析', runs: '结果记录', result: '分析结果', methods: '方法与验证'};
+  const labels = {overview: '总览', analyze: '新建分析', runs: '结果记录', training: '标注训练', result: '分析结果', methods: '方法与验证'};
   document.title = `${labels[target]} | SiC 晶圆点状目标分析平台`;
   elements.sidebar.classList.remove('is-open');
   elements.menuButton.setAttribute('aria-expanded', 'false');
   window.scrollTo({top: 0, behavior: 'auto'});
   return target;
+}
+
+function renderTrainingStatus(payload) {
+  state.training = payload;
+  const counts = payload.consensus_label_counts || {};
+  const model = payload.model;
+  const validation = model?.validation || {};
+  const validationStatus = validation.status || 'not_available';
+  elements.trainingStatus.className = '';
+  elements.trainingStatus.removeAttribute('aria-busy');
+  elements.trainingStatus.innerHTML = `<div class="training-status-grid">
+    <div><span>一致目标标签</span><strong>${Number(counts.target || 0)}</strong><small>进入相应 split</small></div>
+    <div><span>一致伪影标签</span><strong>${Number(counts.artifact || 0)}</strong><small>进入相应 split</small></div>
+    <div><span>不确定 / 冲突</span><strong>${Number(payload.uncertain_candidate_count || 0) + Number(payload.conflicting_candidate_count || 0)}</strong><small>不进入训练</small></div>
+  </div><p class="training-model-summary">${model
+    ? `当前模型：${escapeHtml(String(model.model_sha256 || '').slice(0, 16))}… · 训练 ${Number(model.training_sample_count || 0)} 条 · 留出评估 ${escapeHtml(validationStatus)}`
+    : `当前没有可用模型${payload.model_error ? `：${escapeHtml(payload.model_error)}` : '。完成足量校准标注后训练。'}`}</p>`;
+  elements.trainingModelDownload.hidden = !payload.model_available;
+  elements.useTrainedClassifier.disabled = !payload.model_available;
+  if (!payload.model_available) elements.useTrainedClassifier.checked = false;
+  elements.analysisClassifierStatus.textContent = payload.model_available
+    ? `可用模型 ${String(model?.model_sha256 || '').slice(0, 12)}…；${validationStatus}`
+    : '尚无可用模型；请先在结果页标注并训练';
+}
+
+async function refreshTraining({announceResult = false} = {}) {
+  try {
+    const payload = await api.getTraining();
+    renderTrainingStatus(payload);
+    if (announceResult) announce(`已读取 ${payload.annotation_count || 0} 条本机专家标注`);
+  } catch (error) {
+    elements.trainingStatus.className = 'empty-state';
+    elements.trainingStatus.removeAttribute('aria-busy');
+    elements.trainingStatus.textContent = `训练状态读取失败：${error.message}`;
+    elements.useTrainedClassifier.disabled = true;
+    elements.useTrainedClassifier.checked = false;
+    elements.analysisClassifierStatus.textContent = '训练状态不可用';
+    if (announceResult) showAlert(error.message);
+  }
 }
 
 async function refreshRuns({announceResult = false} = {}) {
@@ -125,7 +172,7 @@ async function loadCandidates(page = 1) {
     page,
     page_size: form.get('page_size') || 50,
   };
-  document.querySelector('#candidate-body').innerHTML = '<tr><td colspan="10" class="muted-cell">正在读取当前页…</td></tr>';
+  document.querySelector('#candidate-body').innerHTML = '<tr><td colspan="11" class="muted-cell">正在读取当前页…</td></tr>';
   try {
     const payload = await api.getDefects(state.currentRun.run_id, filters);
     state.candidates.page = payload.page;
@@ -168,7 +215,7 @@ async function handleRoute() {
     await loadRun(route.runId);
     return;
   }
-  if (!['overview', 'analyze', 'runs', 'methods'].includes(route.view)) {
+  if (!['overview', 'analyze', 'runs', 'training', 'methods'].includes(route.view)) {
     window.location.hash = '#overview';
     return;
   }
@@ -275,6 +322,63 @@ elements.candidateFilters.addEventListener('submit', (event) => {
   event.preventDefault();
   loadCandidates(1);
 });
+document.querySelector('#candidate-browser').addEventListener('click', async (event) => {
+  const button = event.target.closest('.candidate-label-button');
+  if (!button || !state.currentRun) return;
+  const peers = [...document.querySelectorAll(`.candidate-label-button[data-defect-id="${CSS.escape(button.dataset.defectId)}"]`)];
+  peers.forEach((item) => { item.disabled = true; });
+  try {
+    const payload = await api.saveTrainingLabel({
+      run_id: state.currentRun.run_id,
+      defect_id: button.dataset.defectId,
+      label: button.dataset.label,
+      split: document.querySelector('#annotation-split').value,
+      reviewer_id: document.querySelector('#annotation-reviewer').value.trim() || 'local_expert',
+    });
+    peers.forEach((item) => item.setAttribute('aria-pressed', String(item.dataset.label === button.dataset.label)));
+    renderTrainingStatus(payload.training);
+    announce(`候选 ${button.dataset.defectId} 已标注为${button.textContent}`);
+  } catch (error) {
+    showAlert(error.message);
+  } finally {
+    peers.forEach((item) => { item.disabled = false; });
+  }
+});
+
+elements.trainingForm.addEventListener('submit', async (event) => {
+  event.preventDefault();
+  elements.trainingError.hidden = true;
+  elements.trainingError.textContent = '';
+  const form = new FormData(elements.trainingForm);
+  const acceptThreshold = Number(form.get('accept_threshold'));
+  const rejectThreshold = Number(form.get('reject_threshold'));
+  const regularization = Number(form.get('regularization'));
+  if (!Number.isFinite(acceptThreshold) || !Number.isFinite(rejectThreshold) || rejectThreshold >= acceptThreshold) {
+    elements.trainingError.textContent = '拒绝概率上限必须小于接受概率下限。';
+    elements.trainingError.hidden = false;
+    return;
+  }
+  const submit = document.querySelector('#train-classifier');
+  submit.disabled = true;
+  submit.textContent = '正在训练…';
+  try {
+    const payload = await api.trainClassifier({
+      accept_threshold: acceptThreshold,
+      reject_threshold: rejectThreshold,
+      regularization: regularization,
+    });
+    renderTrainingStatus(payload.training);
+    announce('候选分类器训练完成并已启用');
+  } catch (error) {
+    elements.trainingError.textContent = error.message;
+    elements.trainingError.hidden = false;
+    elements.trainingError.setAttribute('tabindex', '-1');
+    elements.trainingError.focus();
+  } finally {
+    submit.disabled = false;
+    submit.textContent = '训练并启用候选分类器';
+  }
+});
 document.querySelector('#candidate-first').addEventListener('click', () => loadCandidates(1));
 document.querySelector('#candidate-prev').addEventListener('click', () => loadCandidates(Math.max(1, state.candidates.page - 1)));
 document.querySelector('#candidate-next').addEventListener('click', () => loadCandidates(Math.min(state.candidates.totalPages, state.candidates.page + 1)));
@@ -283,6 +387,7 @@ document.querySelector('#image-artifact').addEventListener('change', (event) => 
 
 document.querySelector('#refresh-runs').addEventListener('click', () => refreshRuns({announceResult: true}));
 document.querySelector('#refresh-history').addEventListener('click', () => refreshRuns({announceResult: true}));
+document.querySelector('#refresh-training').addEventListener('click', () => refreshTraining({announceResult: true}));
 elements.menuButton.addEventListener('click', () => {
   const open = !elements.sidebar.classList.contains('is-open');
   elements.sidebar.classList.toggle('is-open', open);
@@ -309,4 +414,5 @@ document.querySelector('.skip-link').addEventListener('click', () => {
 
 window.addEventListener('hashchange', handleRoute);
 refreshRuns();
+refreshTraining();
 handleRoute();

@@ -11,6 +11,8 @@ const statusMessage = document.querySelector("#status-message");
 const progress = document.querySelector("#analysis-progress");
 const results = document.querySelector("#results");
 const bundleDownload = document.querySelector("#bundle-download");
+const classifierInput = document.querySelector("#classifier-file");
+const classifierLine = document.querySelector("#classifier-line");
 
 const imageLabels = {
   "paper_aligned_result_figure.png": "论文式点状目标与整片密度综合成果",
@@ -61,6 +63,7 @@ function refreshStartButton() {
   const fileIsEligible = selectedFile && Number.isFinite(limit) && selectedFile.size > 0 && selectedFile.size <= limit;
   analyzeButton.disabled = Boolean(worker) || !fileIsEligible;
   fileInput.disabled = Boolean(worker);
+  classifierInput.disabled = Boolean(worker);
   dropZone.setAttribute("aria-disabled", String(Boolean(worker)));
 }
 
@@ -129,6 +132,25 @@ function readOptions() {
     use_watershed: document.querySelector("#watershed").checked,
     manual_geometry: supplied === 3 ? { center_x: Number(values[0]), center_y: Number(values[1]), radius_px: Number(values[2]) } : null,
   };
+}
+
+async function readClassifierModel() {
+  const file = classifierInput.files?.[0];
+  if (!file) return null;
+  if (!/\.json$/i.test(file.name)) throw new Error("候选分类器必须是 JSON 文件。 ");
+  if (file.size <= 0 || file.size > 1024 * 1024) {
+    throw new Error("候选分类器 JSON 必须为非空且不超过 1 MiB。 ");
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(await file.text());
+  } catch {
+    throw new Error("候选分类器 JSON 无法解析。 ");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("候选分类器 JSON 顶层必须是对象。 ");
+  }
+  return parsed;
 }
 
 function errorMessage(raw) {
@@ -242,7 +264,7 @@ async function runAnalysis(event) {
   const generation = ++runGeneration;
   try {
     validateFile(runFile);
-    const options = readOptions();
+    const options = {...readOptions(), classifier_model: await readClassifierModel()};
     results.hidden = true;
     cleanupObjectUrls();
     analyzeButton.disabled = true;
@@ -251,7 +273,7 @@ async function runAnalysis(event) {
     dropZone.setAttribute("aria-disabled", "true");
     cancelButton.hidden = false;
     setStatus("running", "正在准备分析", "正在把只读 File 交给独立 Worker；尚未复制到 Python 内存。", null);
-    worker = new Worker("assets/analysis-worker.mjs?v=20260808c", { type: "module" });
+    worker = new Worker("assets/analysis-worker.mjs?v=20260810a", { type: "module" });
     worker.addEventListener("message", (messageEvent) => {
       if (generation !== runGeneration) return;
       const payload = messageEvent.data;
@@ -285,6 +307,12 @@ async function runAnalysis(event) {
 }
 
 fileInput.addEventListener("change", () => setSelectedFile(fileInput.files?.[0] || null));
+classifierInput.addEventListener("change", () => {
+  const file = classifierInput.files?.[0];
+  classifierLine.textContent = file
+    ? `已选择 ${file.name}；开始分析时会核验模型结构与 SHA-256。`
+    : "未导入模型；本次将使用透明形态与对比度规则。";
+});
 for (const eventName of ["dragenter", "dragover"]) dropZone.addEventListener(eventName, (event) => {
   event.preventDefault();
   if (!worker) dropZone.classList.add("is-dragging");

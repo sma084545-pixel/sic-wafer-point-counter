@@ -37,6 +37,7 @@
         <a href="#overview" data-nav="overview"><span aria-hidden="true">⌂</span>总览</a>
         <a href="#analyze" data-nav="analyze"><span aria-hidden="true">＋</span>新建分析</a>
         <a href="#runs" data-nav="runs"><span aria-hidden="true">▤</span>结果记录</a>
+        <a href="#training" data-nav="training"><span aria-hidden="true">◎</span>标注训练</a>
         <p class="nav-label">研究说明</p>
         <a href="#methods" data-nav="methods"><span aria-hidden="true">△</span>方法与验证</a>
       </nav>
@@ -140,6 +141,10 @@
                   <input id="use-watershed" name="use_watershed" type="checkbox" value="true" checked>
                   <span><strong>启用保守分水岭</strong><small>尝试分离互相接触且具有多个可靠距离峰的候选</small></span>
                 </label>
+                <label class="check-row" for="use-trained-classifier">
+                  <input id="use-trained-classifier" name="use_trained_classifier" type="checkbox" value="true" disabled>
+                  <span><strong>使用已训练候选分类器</strong><small id="analysis-classifier-status">尚未读取本机训练状态</small></span>
+                </label>
               </fieldset>
 
               <details class="manual-geometry">
@@ -190,6 +195,60 @@
             </table>
           </div>
           <div id="history-diagnostics" class="callout neutral" hidden></div>
+        </section>
+      </section>
+
+      <section class="view" id="view-training" data-view="training" hidden>
+        <header class="page-heading">
+          <div><h1>专家标注与候选训练</h1><p>在候选局部裁剪上标注目标、伪影或不确定，再训练可移植的图像候选分类器</p></div>
+          <a class="button secondary" href="#runs">选择结果并标注</a>
+        </header>
+
+        <section class="boundary-banner" aria-labelledby="training-boundary-title">
+          <span class="boundary-icon" aria-hidden="true">i</span>
+          <div>
+            <h2 id="training-boundary-title">训练边界</h2>
+            <p>该分类器学习的是候选图像特征，不会把目标自动证明为 TSD、TED 或 BPD。有效掩膜和边界排除属于硬约束，训练模型不能覆盖。</p>
+          </div>
+        </section>
+
+        <div class="training-grid">
+          <section class="panel" aria-labelledby="training-status-title">
+            <div class="panel-heading"><div><h2 id="training-status-title">标注与模型状态</h2><p>标签和模型只保存在本机项目的 training/ 目录</p></div><button class="button quiet" id="refresh-training" type="button">刷新</button></div>
+            <div id="training-status" class="empty-state" aria-busy="true">正在读取训练状态…</div>
+            <div class="artifact-links training-downloads">
+              <a href="/api/training/annotations" download="candidate_annotations.csv">下载全部原始标注 CSV</a>
+              <a id="training-model-download" href="/api/training/model" download="candidate_classifier.json" hidden>下载当前分类器 JSON</a>
+            </div>
+          </section>
+
+          <section class="panel" aria-labelledby="training-controls-title">
+            <div class="panel-heading"><div><h2 id="training-controls-title">训练控制</h2><p>默认保留不确定区间，避免低把握候选直接计入 n</p></div></div>
+            <form id="training-form" autocomplete="off">
+              <div class="field-grid">
+                <label for="accept-threshold">接受概率下限</label>
+                <input id="accept-threshold" name="accept_threshold" type="number" min="0.51" max="0.99" step="0.01" value="0.75" required>
+                <label for="reject-threshold">拒绝概率上限</label>
+                <input id="reject-threshold" name="reject_threshold" type="number" min="0.01" max="0.49" step="0.01" value="0.25" required>
+                <label for="regularization">正则化强度</label>
+                <input id="regularization" name="regularization" type="number" min="0.000001" step="any" value="1" required>
+              </div>
+              <p class="callout neutral">至少需要 5 个“目标”和 5 个“伪影”校准标签。不确定标签、标注者冲突和 validation / locked test 标签不会进入训练拟合。</p>
+              <p id="training-error" class="form-error" role="alert" hidden></p>
+              <button class="button primary wide" id="train-classifier" type="submit">训练并启用候选分类器</button>
+            </form>
+          </section>
+        </div>
+
+        <section class="panel" aria-labelledby="training-workflow-title">
+          <div class="panel-heading"><div><h2 id="training-workflow-title">建议工作流</h2><p>对应论文人工计数校准与 ImageJ Trainable Weka 的“标注—训练—应用”思路</p></div></div>
+          <ol class="numbered-steps">
+            <li>先运行一张代表性晶圆图像，在结果页候选浏览器逐个查看原始局部裁剪。</li>
+            <li>给清楚样本标“目标”或“伪影”，拿不准时必须标“不确定”，不要强行二分。</li>
+            <li>至少跨中心、边缘、不同对比度与不同晶圆收集校准标签，再训练模型。</li>
+            <li>把独立晶圆标签设为 validation 或 locked test；这些标签只评估，不参与训练。</li>
+            <li>新建分析时勾选“使用已训练候选分类器”，结果会保存规则判定、模型概率、最终判定和模型哈希。</li>
+          </ol>
         </section>
       </section>
 
@@ -256,11 +315,17 @@
             <label for="candidate-page-size">每页<select id="candidate-page-size" name="page_size"><option>25</option><option selected>50</option><option>100</option><option>200</option></select></label>
             <button class="button secondary" type="submit">应用筛选</button>
           </form>
+          <fieldset class="candidate-annotation-settings">
+            <legend>本页新标注设置</legend>
+            <label for="annotation-split">数据用途<select id="annotation-split"><option value="calibration" selected>校准/训练</option><option value="validation">独立验证</option><option value="locked_test">锁定测试</option></select></label>
+            <label for="annotation-reviewer">标注者 ID<input id="annotation-reviewer" value="local_expert" maxlength="80" autocomplete="off"></label>
+            <p>validation 与 locked test 只评估，不参与模型拟合；同一晶圆不应跨集合。</p>
+          </fieldset>
           <div class="table-scroll candidate-table-wrap" tabindex="0" aria-label="候选明细表，可横向滚动">
             <table class="candidate-table">
               <caption class="visually-hidden">当前筛选条件下的点状目标候选</caption>
-              <thead><tr><th scope="col">ID</th><th scope="col">缩略图</th><th scope="col">x (mm)</th><th scope="col">y (mm)</th><th scope="col">等效直径</th><th scope="col">圆度</th><th scope="col">对比度</th><th scope="col">距有效边界</th><th scope="col">自动判定</th><th scope="col">拒绝原因</th></tr></thead>
-              <tbody id="candidate-body"><tr><td colspan="10" class="muted-cell">选择一个完成的运行以读取候选。</td></tr></tbody>
+              <thead><tr><th scope="col">ID</th><th scope="col">缩略图</th><th scope="col">x (mm)</th><th scope="col">y (mm)</th><th scope="col">等效直径</th><th scope="col">圆度</th><th scope="col">对比度</th><th scope="col">距有效边界</th><th scope="col">自动判定</th><th scope="col">拒绝原因</th><th scope="col">专家训练标签</th></tr></thead>
+              <tbody id="candidate-body"><tr><td colspan="11" class="muted-cell">选择一个完成的运行以读取候选。</td></tr></tbody>
             </table>
           </div>
           <div id="candidate-cards" class="candidate-cards"></div>
@@ -285,12 +350,12 @@
         <div class="methods-grid">
           <section class="panel">
             <h2>测量定义</h2>
-            <div class="method-formula"><span>n</span><small>当前规则接受的点状目标数</small><b>÷</b><span>S</span><small>最终有效像素掩膜面积</small><b>=</b><span>ρ</span><small>点状目标密度 cm<sup>−2</sup></small></div>
+            <div class="method-formula"><span>n</span><small>规则或训练分类器最终接受数</small><b>÷</b><span>S</span><small>最终有效像素掩膜面积</small><b>=</b><span>ρ</span><small>点状目标密度 cm<sup>−2</sup></small></div>
             <p>S 不是无条件使用 78.5398 cm²，而是由真实晶圆轮廓、边缘排除区、notch / flat、遮挡和用户无效区共同决定。</p>
           </section>
           <section class="panel">
             <h2>处理流程</h2>
-            <ol class="numbered-steps"><li>以全局分位数窗口将原始灰度映射为 float32。</li><li>在预览图检测晶圆并映射回原图标定 100 mm。</li><li>构建最终有效分析掩膜，按有效像素计算 S。</li><li>背景校正、多尺度暗目标增强与阈值产生候选。</li><li>可选保守分水岭处理粘连，形态与对比度规则筛选。</li><li>保存全部候选、拒绝原因、裁剪、叠加图与配置。</li></ol>
+            <ol class="numbered-steps"><li>以全局分位数窗口将原始灰度映射为 float32。</li><li>在预览图检测晶圆并映射回原图标定 100 mm。</li><li>构建最终有效分析掩膜，按有效像素计算 S。</li><li>背景校正、多尺度暗目标增强与阈值产生候选。</li><li>先保存透明形态规则；可选训练分类器再给出概率、目标/伪影/不确定判定。</li><li>保存全部候选、两级判定、裁剪、叠加图、模型哈希与配置。</li></ol>
           </section>
           <section class="panel validation-card">
             <h2>真实数据验证状态</h2>
@@ -316,6 +381,7 @@
     <a href="#overview" data-nav="overview"><span aria-hidden="true">⌂</span>总览</a>
     <a href="#analyze" data-nav="analyze"><span aria-hidden="true">＋</span>新分析</a>
     <a href="#runs" data-nav="runs"><span aria-hidden="true">▤</span>结果</a>
+    <a href="#training" data-nav="training"><span aria-hidden="true">◎</span>训练</a>
     <a href="#methods" data-nav="methods"><span aria-hidden="true">△</span>方法</a>
   </nav>
 

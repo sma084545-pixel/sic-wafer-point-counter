@@ -7,6 +7,7 @@ const ARTIFACT_LABELS = {
   'report.html': '完整 HTML 报告',
   'summary.json': '摘要 JSON',
   'summary.csv': '摘要 CSV',
+  'candidate_classifier.json': '本次使用的候选分类器 JSON',
   'defects_all.csv': '全部候选 CSV',
   'defects_accepted.csv': '接受目标 CSV',
   'defects_rejected.csv': '拒绝目标 CSV',
@@ -200,6 +201,15 @@ function renderMetadata(s) {
       ['分水岭后候选数', numeric(s.post_watershed_candidate_count, '', {maximumFractionDigits: 0})],
       ['拒绝数', numeric(s.rejected_count, '', {maximumFractionDigits: 0})],
     ]],
+    ['候选判定', [
+      ['最终判定依据', String(s.decision_basis ?? 'configured_image_rules')],
+      ['分类器状态', String(pick(s, 'candidate_classifier.status') ?? 'disabled')],
+      ['模型 SHA-256', String(pick(s, 'candidate_classifier.model_sha256') ?? '未提供')],
+      ['接受概率下限', numeric(pick(s, 'candidate_classifier.accept_threshold'), '', {maximumFractionDigits: 3})],
+      ['拒绝概率上限', numeric(pick(s, 'candidate_classifier.reject_threshold'), '', {maximumFractionDigits: 3})],
+      ['模型不确定候选', numeric(pick(s, 'candidate_classifier.uncertain_count'), '', {maximumFractionDigits: 0})],
+      ['模型留出验证', String(pick(s, 'candidate_classifier.validation_status') ?? '未提供')],
+    ]],
     ['运行', [
       ['处理模式', String(s.processing_mode ?? '未提供')],
       ['检测阈值', numeric(s.detection_threshold_value, '', {maximumFractionDigits: 6})],
@@ -225,8 +235,9 @@ export function renderRunDetail(detail) {
   const ciLow = finiteNumber(s.poisson_95_ci_lower_cm2);
   const ciHigh = finiteNumber(s.poisson_95_ci_upper_cm2);
   const ci = ciLow === null || ciHigh === null ? '未提供' : `[${formatScientific(ciLow, 3)}, ${formatScientific(ciHigh, 3)}]`;
+  const countBasis = s.decision_basis === 'trained_candidate_classifier' ? '训练分类器最终判定' : '透明图像规则';
   document.querySelector('#result-metrics').innerHTML = [
-    metric('接受点状目标 n', formatNumber(s.accepted_count, {maximumFractionDigits: 0}), '当前图像规则'),
+    metric('接受点状目标 n', formatNumber(s.accepted_count, {maximumFractionDigits: 0}), countBasis),
     metric('有效分析面积 S', `${numeric(s.valid_analysis_area_cm2, '', {maximumFractionDigits: 6})} cm²`, '来自最终有效掩膜'),
     metric('点状目标密度 ρ', `${formatScientific(s.point_density_cm2, 4)} cm⁻²`, 'ρ = n / S'),
     metric('计数不确定度 1σ', `± ${formatScientific(s.counting_uncertainty_cm2, 4)} cm⁻²`, '只含有限计数波动'),
@@ -352,23 +363,37 @@ function candidateCropMarkup(row, id, size) {
   return `<div class="candidate-crop-links"><a href="${escapeHtml(row.crop_preview_url)}" target="_blank" rel="noopener"><img loading="lazy" decoding="async" src="${escapeHtml(row.crop_preview_url)}" alt="候选 ${escapeHtml(id)} 局部裁剪" width="${size}" height="${size}"></a><a class="candidate-download" href="${escapeHtml(downloadUrl(source))}" download="${escapeHtml(filename)}">下载原图</a></div>`;
 }
 
+function candidateTrainingControls(row, id) {
+  const current = String(row.training_label || '');
+  const labels = [
+    ['target', '目标'],
+    ['artifact', '伪影'],
+    ['uncertain', '不确定'],
+  ];
+  const buttons = labels.map(([value, text]) => `<button class="candidate-label-button" type="button" data-defect-id="${escapeHtml(id)}" data-label="${value}" aria-pressed="${String(current === value)}">${text}</button>`).join('');
+  const conflict = current === 'conflict' ? '<span class="status-badge error">标注冲突</span>' : '';
+  return `<div class="candidate-label-actions" aria-label="候选 ${escapeHtml(id)} 的专家训练标签">${buttons}${conflict}</div>`;
+}
+
 export function renderCandidatePage(payload) {
   const rows = Array.isArray(payload.rows) ? payload.rows : [];
   const body = document.querySelector('#candidate-body');
   const cards = document.querySelector('#candidate-cards');
   if (!rows.length) {
-    body.innerHTML = '<tr><td colspan="10" class="muted-cell">当前筛选条件下没有候选。</td></tr>';
+    body.innerHTML = '<tr><td colspan="11" class="muted-cell">当前筛选条件下没有候选。</td></tr>';
     cards.innerHTML = '<p class="empty-state">当前筛选条件下没有候选。</p>';
   } else {
     body.innerHTML = rows.map((row) => {
       const value = candidateValues(row);
       const thumbnail = candidateCropMarkup(row, value.id, 40);
-      return `<tr><td>${escapeHtml(value.id)}</td><td>${thumbnail}</td><td>${value.x}</td><td>${value.y}</td><td>${value.diameter}</td><td>${value.circularity}</td><td>${value.contrast}</td><td>${value.boundary}</td><td>${candidateStatus(row)}</td><td>${escapeHtml(value.reason)}</td></tr>`;
+      const training = candidateTrainingControls(row, value.id);
+      return `<tr><td>${escapeHtml(value.id)}</td><td>${thumbnail}</td><td>${value.x}</td><td>${value.y}</td><td>${value.diameter}</td><td>${value.circularity}</td><td>${value.contrast}</td><td>${value.boundary}</td><td>${candidateStatus(row)}</td><td>${escapeHtml(value.reason)}</td><td>${training}</td></tr>`;
     }).join('');
     cards.innerHTML = rows.map((row) => {
       const value = candidateValues(row);
       const thumbnail = candidateCropMarkup(row, value.id, 52);
-      return `<article class="candidate-card">${thumbnail}<div><strong>#${escapeHtml(value.id)} · ${candidateStatus(row)}</strong><dl><div><dt>x / y</dt><dd>${value.x} / ${value.y} mm</dd></div><div><dt>直径</dt><dd>${value.diameter}</dd></div><div><dt>圆度</dt><dd>${value.circularity}</dd></div><div><dt>距边界</dt><dd>${value.boundary}</dd></div></dl><span class="subtext">${escapeHtml(value.reason)}</span></div></article>`;
+      const training = candidateTrainingControls(row, value.id);
+      return `<article class="candidate-card">${thumbnail}<div><strong>#${escapeHtml(value.id)} · ${candidateStatus(row)}</strong><dl><div><dt>x / y</dt><dd>${value.x} / ${value.y} mm</dd></div><div><dt>直径</dt><dd>${value.diameter}</dd></div><div><dt>圆度</dt><dd>${value.circularity}</dd></div><div><dt>距边界</dt><dd>${value.boundary}</dd></div></dl><span class="subtext">${escapeHtml(value.reason)}</span></div>${training}</article>`;
     }).join('');
   }
   document.querySelector('#candidate-total').textContent = `筛选后 ${payload.total} 条`;
@@ -385,6 +410,6 @@ export function renderCandidatePage(payload) {
 }
 
 export function renderCandidateError(message) {
-  document.querySelector('#candidate-body').innerHTML = `<tr><td colspan="10" class="muted-cell">候选读取失败：${escapeHtml(message)}</td></tr>`;
+  document.querySelector('#candidate-body').innerHTML = `<tr><td colspan="11" class="muted-cell">候选读取失败：${escapeHtml(message)}</td></tr>`;
   document.querySelector('#candidate-cards').innerHTML = `<p class="empty-state">候选读取失败：${escapeHtml(message)}</p>`;
 }
