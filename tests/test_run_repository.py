@@ -133,6 +133,11 @@ def test_result_exports_every_figure_table_and_candidate_crop_without_recompress
     (field_dir / "01_marked.png").write_bytes(b"marked")
     (field_dir / "02_positions.xlsx").write_bytes(b"positions")
     (field_dir / "03_raw_original.tif").write_bytes(b"field-raw")
+    second_field = local_dir / "field_0002_X_-6.000_Y_4.500"
+    second_field.mkdir()
+    (second_field / "01_marked.png").write_bytes(b"marked-2")
+    (second_field / "02_positions.xlsx").write_bytes(b"positions-2")
+    (second_field / "03_raw_original.tif").write_bytes(b"field-raw-2")
     fields = ["defect_id", "accepted", "rejection_reason", "crop_path", "crop_preview_path"]
     with (run / "defects_all.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -151,11 +156,14 @@ def test_result_exports_every_figure_table_and_candidate_crop_without_recompress
             })
 
     exporter = ResultExporter(RunRepository(tmp_path / "results"))
-    assert set(exporter.available("export_run")) == {"figures", "data", "candidate-crops"}
+    assert set(exporter.available("export_run")) == {
+        "figures", "data", "candidate-crops", "cu-style-fields"
+    }
 
     figure_archive = exporter.archive("export_run", "figures")
     data_archive = exporter.archive("export_run", "data")
     crop_archive = exporter.archive("export_run", "candidate-crops")
+    cu_style_archive = exporter.archive("export_run", "cu-style-fields")
     assert exporter.archive("export_run", "candidate-crops") == crop_archive
 
     with zipfile.ZipFile(figure_archive) as archive:
@@ -187,6 +195,19 @@ def test_result_exports_every_figure_table_and_candidate_crop_without_recompress
         assert manifest["raw_crops_exported"] == 2
         assert manifest["preview_crops_exported"] == 2
         assert manifest["stored_without_recompression"] is True
+    with zipfile.ZipFile(cu_style_archive) as archive:
+        assert archive.namelist() == [
+            "00000_global_overview.xlsx",
+            "synthetic_clean_00001_X_0_Y_0_01_marked.png",
+            "synthetic_clean_00001_X_0_Y_0_02_positions.xlsx",
+            "synthetic_clean_00001_X_0_Y_0_03_raw_original.tif",
+            "synthetic_clean_00002_X_-6_Y_4.5_01_marked.png",
+            "synthetic_clean_00002_X_-6_Y_4.5_02_positions.xlsx",
+            "synthetic_clean_00002_X_-6_Y_4.5_03_raw_original.tif",
+        ]
+        assert archive.read("synthetic_clean_00001_X_0_Y_0_01_marked.png") == b"marked"
+        assert archive.read("synthetic_clean_00002_X_-6_Y_4.5_02_positions.xlsx") == b"positions-2"
+        assert all("/" not in name for name in archive.namelist())
 
 
 def test_candidate_crop_export_fails_closed_for_csv_path_escape(tmp_path: Path) -> None:
@@ -211,6 +232,23 @@ def test_candidate_crop_export_fails_closed_for_csv_path_escape(tmp_path: Path) 
         exporter.archive("unsafe_export", "candidate-crops")
     exports = run / "exports"
     assert not list(exports.glob("*.zip"))
+
+
+def test_cu_style_export_is_hidden_when_any_field_triplet_is_incomplete(
+    tmp_path: Path,
+) -> None:
+    run = _make_run(tmp_path, "incomplete_fields")
+    root = run / "local_fields"
+    field = root / "field_0001_X_0.000_Y_0.000"
+    field.mkdir(parents=True)
+    (root / "00_global_overview.xlsx").write_bytes(b"global")
+    (field / "01_marked.png").write_bytes(b"marked")
+    (field / "03_raw_original.tif").write_bytes(b"raw")
+
+    exporter = ResultExporter(RunRepository(tmp_path / "results"))
+    assert "cu-style-fields" not in exporter.available("incomplete_fields")
+    with pytest.raises(RunRepositoryError, match="not available"):
+        exporter.archive("incomplete_fields", "cu-style-fields")
 
 
 def test_api_streams_one_small_page_from_one_hundred_thousand_candidates(tmp_path: Path) -> None:
@@ -278,6 +316,13 @@ def test_export_api_exposes_individual_downloads_and_run_scoped_zip_urls(tmp_pat
     crop_dir.mkdir()
     (crop_dir / "candidate_000001.tif").write_bytes(b"raw")
     (crop_dir / "candidate_000001_preview.png").write_bytes(b"preview")
+    local_dir = run / "local_fields"
+    field_dir = local_dir / "field_0001_X_-10.000_Y_-46.000"
+    field_dir.mkdir(parents=True)
+    (local_dir / "00_global_overview.xlsx").write_bytes(b"global")
+    (field_dir / "01_marked.png").write_bytes(b"marked")
+    (field_dir / "02_positions.xlsx").write_bytes(b"positions")
+    (field_dir / "03_raw_original.tif").write_bytes(b"field-raw")
     with (run / "defects_all.csv").open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(
             handle,
@@ -299,7 +344,9 @@ def test_export_api_exposes_individual_downloads_and_run_scoped_zip_urls(tmp_pat
             detail = client.get("/api/runs/download_run")
             assert detail.status_code == 200
             payload = detail.get_json()
-            assert set(payload["exports"]) == {"figures", "data", "candidate-crops"}
+            assert set(payload["exports"]) == {
+                "figures", "data", "candidate-crops", "cu-style-fields"
+            }
             assert payload["artifacts"]["overlay_accepted.png"].endswith(
                 "/api/runs/download_run/files/overlay_accepted.png"
             )
@@ -315,6 +362,16 @@ def test_export_api_exposes_individual_downloads_and_run_scoped_zip_urls(tmp_pat
             assert "all_candidate_crops.zip" in crop_bundle.headers["Content-Disposition"]
             with zipfile.ZipFile(io.BytesIO(crop_bundle.data)) as archive:
                 assert archive.read("candidate_crops/candidate_000001.tif") == b"raw"
+            cu_bundle = client.get(payload["exports"]["cu-style-fields"]["url"])
+            assert cu_bundle.status_code == 200
+            assert "Cu-0008-R_style_local_fields.zip" in cu_bundle.headers["Content-Disposition"]
+            with zipfile.ZipFile(io.BytesIO(cu_bundle.data)) as archive:
+                assert archive.namelist()[:4] == [
+                    "00000_global_overview.xlsx",
+                    "synthetic_clean_00001_X_-10_Y_-46_01_marked.png",
+                    "synthetic_clean_00001_X_-10_Y_-46_02_positions.xlsx",
+                    "synthetic_clean_00001_X_-10_Y_-46_03_raw_original.tif",
+                ]
             latest_bundle = client.get("/api/runs/latest/exports/figures.zip")
             assert latest_bundle.status_code == 200
             assert latest_bundle.mimetype == "application/zip"

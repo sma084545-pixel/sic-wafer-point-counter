@@ -39,6 +39,7 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             assert "SiC 晶圆点状目标分析" in page.get_data(as_text=True)
             assert "独立与批量导出" in page.get_data(as_text=True)
             assert "一次导出全部局部分析包 ZIP" in page.get_data(as_text=True)
+            assert "一键导出 Cu-0008-R 顺序三联件 ZIP" in page.get_data(as_text=True)
             assert "专家标注与候选训练" in page.get_data(as_text=True)
             submit = client.post(
                 "/api/jobs",
@@ -89,7 +90,9 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             assert latest.status_code == 200
             latest_payload = latest.get_json()
             assert latest_payload["run_id"] == job["run_id"]
-            assert set(latest_payload["exports"]) == {"figures", "data", "candidate-crops"}
+            assert set(latest_payload["exports"]) == {
+                "figures", "data", "candidate-crops", "cu-style-fields"
+            }
             latest_figure = client.get(
                 "/api/runs/latest/files/paper_aligned_result_figure.png"
             )
@@ -127,6 +130,18 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
                 assert len(previews) == candidate_total
                 assert len(local_raw) == len(local_marked) == len(local_positions) > 0
                 assert "index/defects_all.csv" in names
+            cu_bundle = client.get(latest_payload["exports"]["cu-style-fields"]["url"])
+            assert cu_bundle.status_code == 200
+            with zipfile.ZipFile(io.BytesIO(cu_bundle.data)) as archive:
+                names = archive.namelist()
+                assert names[0] == "00000_global_overview.xlsx"
+                assert all("/" not in name for name in names)
+                assert (len(names) - 1) % 3 == 0
+                for offset in range(1, len(names), 3):
+                    unit = names[offset:offset + 3]
+                    assert unit[0].endswith("_01_marked.png")
+                    assert unit[1].endswith("_02_positions.xlsx")
+                    assert unit[2].endswith("_03_raw_original.tif")
             assert client.get(f"/api/jobs/{job['job_id']}/files/../../README.md").status_code == 404
     finally:
         manager.shutdown()

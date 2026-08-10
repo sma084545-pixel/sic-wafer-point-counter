@@ -175,8 +175,9 @@ Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入�
 - 训练模型保存为带 SHA-256 的 `training/candidate_classifier.json`。本机新分析可直接启用；GitHub Pages 浏览器分析页可导入同一个 JSON，并由打包的同一 Python 管线核验和应用；
 - 模型只覆盖候选级图像分类，不覆盖最终有效掩膜和边界硬约束，也不自动证明 TSD、TED 或 BPD 的物理身份；没有独立留出晶圆时会明确报告真实准确率未知；
 - 叠加图、掩膜、空间密度图和报告只在本次运行目录内按白名单提供，缺失文件显示“本次运行未生成”；
-- 结果页把每一张分析图、每一份表格和报告都作为独立原文件下载；另提供“全部分析图”“全部报告与表格”“全部局部分析包”三个 ZIP；
+- 结果页把每一张分析图、每一份表格和报告都作为独立原文件下载；另提供“全部分析图”“全部报告与表格”“全部局部分析包”和“Cu-0008-R 格式顺序三联件”四个 ZIP；
 - “全部局部分析包”第一项固定为 `00_global_overview.xlsx`，随后按 4 mm 有效视场保存标记 PNG、位置 Excel 和未改写像素值的 TIFF，并同时保留逐候选裁剪；ZIP 逐文件写盘，不把全部局部图同时载入内存；
+- “Cu-0008-R 格式顺序三联件 ZIP”复用同一批 4 mm 输出，不重新检测或裁剪；它采用扁平目录，第一项为 `00000_global_overview.xlsx`，随后每个序号严格依次排列 `_01_marked.png`、`_02_positions.xlsx`、`_03_raw_original.tif`，便于直接交付或批量遍历；
 - 合成演示醒目标为“合成”，clean/noisy/difficult 都重新经过真实管线，不把合成性能描述成真实 SiC 准确率；
 - 失败运行和低可信度晶圆检测保留摘要与日志，并明确拒绝显示 `rho`。
 
@@ -380,6 +381,7 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `local_fields/field_*/01_marked.png` | 参考设备局部视场形式生成的坐标标记图；红框=自动接受，绿框/叉=自动拒绝，不自动表示 TSD/TED/BPD |
 | `local_fields/field_*/02_positions.xlsx` | 该视场的物理边界、有效面积、局部密度及所有候选位置/形态/拒绝原因，可由 Excel 或 WPS 打开 |
 | `local_fields/field_*/03_raw_original.tif` | 对应 4 mm 视场的原始数值裁剪，不改变源 dtype 或像素值；显示标记只写在独立 PNG 中 |
+| `Cu-0008-R_style_local_fields.zip` | 网页按需生成的扁平兼容包；文件名前缀来自输入图名，并带五位序号和视场中心 `X/Y`，每个视场始终按标记图、位置 Excel、原始 TIFF 三件套排列 |
 | `overlay_accepted.png` | 接受目标的绿色圆圈和编号 |
 | `overlay_all_candidates.png` | 接受目标与被拒绝候选（不同符号） |
 | `overlay_xrt_red_boxes.png` | 自动接受 XRT 点状候选的红色边界框和物理标尺；没有独立 DIC/KOH 数据时绝不画黄色验证圈 |

@@ -13,8 +13,10 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path, PurePosixPath
+import re
 import threading
 from typing import Iterable, Iterator
+import unicodedata
 from uuid import uuid4
 import zipfile
 
@@ -24,6 +26,14 @@ from .run_repository import ARTIFACT_NAMES, RunRepository, RunRepositoryError
 EXPORT_SCHEMA_VERSION = 1
 CROP_COLUMNS = ("crop_path", "crop_preview_path")
 CROP_SUFFIXES = {".png", ".tif", ".tiff"}
+LOCAL_FIELD_PATTERN = re.compile(
+    r"^field_(?P<sequence>\d+)_X_(?P<x>-?\d+(?:\.\d+)?)_Y_(?P<y>-?\d+(?:\.\d+)?)$"
+)
+LOCAL_FIELD_TRIPLET = (
+    ("01_marked.png", "01_marked.png"),
+    ("02_positions.xlsx", "02_positions.xlsx"),
+    ("03_raw_original.tif", "03_raw_original.tif"),
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,7 +65,34 @@ EXPORT_BUNDLES = {
         label="全部局部分析包 ZIP",
         description="首项为全局 Excel；随后是每个视场的标记图、位置 Excel、原始 TIFF，并保留逐候选裁剪。",
     ),
+    "cu-style-fields": ExportBundle(
+        kind="cu-style-fields",
+        filename="Cu-0008-R_style_local_fields.zip",
+        label="Cu-0008-R 格式顺序三联件 ZIP",
+        description="扁平目录；全局 Excel 位于首项，随后每个 4 mm 视场依次为红框图、位置 Excel、原始 TIFF。",
+    ),
 }
+
+
+def _coordinate_token(value: str) -> str:
+    """Format one field-center coordinate like the supplied Cu-0008-R files."""
+
+    parsed = float(value)
+    if abs(parsed) < 0.0005:
+        parsed = 0.0
+    nearest = round(parsed)
+    if abs(parsed - nearest) < 0.0005:
+        return str(int(nearest))
+    return f"{parsed:.3f}".rstrip("0").rstrip(".")
+
+
+def _windows_safe_stem(value: str) -> str:
+    """Return a bounded source-image stem safe for macOS and Windows ZIPs."""
+
+    normalized = unicodedata.normalize("NFKC", value)
+    cleaned = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", normalized).strip(" .")
+    cleaned = re.sub(r"\s+", "_", cleaned)
+    return (cleaned or "wafer_analysis")[:72].rstrip(" .") or "wafer_analysis"
 
 
 class ResultExporter:
@@ -87,6 +124,14 @@ class ResultExporter:
             and not defect_table.is_symlink()
         ):
             available["candidate-crops"] = EXPORT_BUNDLES["candidate-crops"]
+        if local_overview.is_file() and not local_overview.is_symlink():
+            try:
+                member_count = sum(1 for _ in self._cu_style_members(run_id))
+                has_complete_units = member_count > 0 and member_count % 3 == 0
+            except RunRepositoryError:
+                has_complete_units = False
+            if has_complete_units:
+                available["cu-style-fields"] = EXPORT_BUNDLES["cu-style-fields"]
         return available
 
     def archive(self, run_id: str, kind: str) -> Path:
@@ -199,6 +244,53 @@ class ResultExporter:
                 continue
             yield relative, self.repository.resolve_file(run_id, relative)
 
+    def _cu_style_members(self, run_id: str) -> Iterator[tuple[str, Path]]:
+        """Flatten existing 4 mm field triplets in Cu-0008-R-compatible order."""
+
+        run_dir = self.repository.run_dir(run_id)
+        root = run_dir / "local_fields"
+        if root.is_symlink() or not root.is_dir():
+            return
+        summary_path = self.repository.resolve_file(run_id, "summary.json")
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RunRepositoryError("summary.json cannot name the local-field export") from exc
+        input_name = str(summary.get("input_file_name") or run_id)
+        prefix = _windows_safe_stem(Path(input_name).stem)
+
+        units: list[tuple[int, str, str, Path]] = []
+        for field_dir in root.iterdir():
+            if field_dir.is_symlink():
+                raise RunRepositoryError("local field symlinks are not exported")
+            if not field_dir.is_dir():
+                continue
+            match = LOCAL_FIELD_PATTERN.fullmatch(field_dir.name)
+            if match is None:
+                continue
+            sequence = int(match.group("sequence"))
+            units.append(
+                (
+                    sequence,
+                    _coordinate_token(match.group("x")),
+                    _coordinate_token(match.group("y")),
+                    field_dir,
+                )
+            )
+
+        for sequence, x_token, y_token, field_dir in sorted(units):
+            common = f"{prefix}_{sequence:05d}_X_{x_token}_Y_{y_token}"
+            for source_name, output_suffix in LOCAL_FIELD_TRIPLET:
+                source = field_dir / source_name
+                if source.is_symlink() or not source.is_file():
+                    raise RunRepositoryError(
+                        f"local field {field_dir.name} is missing {source_name}"
+                    )
+                relative = source.relative_to(run_dir).as_posix()
+                yield f"{common}_{output_suffix}", self.repository.resolve_file(
+                    run_id, relative
+                )
+
     @staticmethod
     def _write_members(
         archive: zipfile.ZipFile,
@@ -263,6 +355,21 @@ class ResultExporter:
                     compress_type=zipfile.ZIP_STORED,
                 )
                 statistics["index_files"] = 1
+            elif kind == "cu-style-fields":
+                overview = self.repository.resolve_file(
+                    run_id, "local_fields/00_global_overview.xlsx"
+                )
+                archive.write(
+                    overview,
+                    "00000_global_overview.xlsx",
+                    compress_type=zipfile.ZIP_STORED,
+                )
+                statistics["local_field_triplet_files"] = self._write_members(
+                    archive, self._cu_style_members(run_id)
+                )
+                # This compatibility bundle intentionally contains only the
+                # first global workbook followed by flat, ordered triplets.
+                return
             else:  # guarded by available(), retained for defensive callers
                 raise RunRepositoryError("unknown export bundle kind")
             archive.writestr(

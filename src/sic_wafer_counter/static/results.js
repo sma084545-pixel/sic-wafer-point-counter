@@ -303,6 +303,16 @@ export function renderRunDetail(detail) {
     cropExportLink.removeAttribute('href');
   }
 
+  const cuStyleExport = exports['cu-style-fields'];
+  const cuStyleExportLink = document.querySelector('#cu-style-fields-export');
+  cuStyleExportLink.hidden = !cuStyleExport?.url;
+  if (cuStyleExport?.url) {
+    cuStyleExportLink.href = cuStyleExport.url;
+    cuStyleExportLink.download = cuStyleExport.filename || 'Cu-0008-R_style_local_fields.zip';
+  } else {
+    cuStyleExportLink.removeAttribute('href');
+  }
+
   const candidateBrowser = document.querySelector('#candidate-browser');
   candidateBrowser.hidden = !artifacts['defects_all.csv'] || failed;
   const figures = [['radial_density.png', '径向密度'], ['angular_density.png', '方位角密度'], ['density_heatmap.png', '二维密度热图']]

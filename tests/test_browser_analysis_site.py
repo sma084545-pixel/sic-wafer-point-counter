@@ -59,6 +59,7 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
     assert "独立参考未提供" in html
     assert "非 DIC/KOH 验证" in html
     assert "整片密度热图" in html
+    assert "Cu-0008-R 格式顺序三联件 ZIP" in html
     assert "未经材料专家标注或独立实验确认" in html
     assert "下载完整结果 ZIP" in html
     assert "本机工作台训练的分类器 JSON" in html
@@ -170,7 +171,7 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
 
     project_wheel = runtime / manifest["package_wheel"]["file"]
-    assert project_wheel.name == "sic_wafer_point_counter-0.3.0-py3-none-any.whl"
+    assert project_wheel.name == "sic_wafer_point_counter-0.3.1-py3-none-any.whl"
     with zipfile.ZipFile(project_wheel) as archive:
         packaged_names = set(archive.namelist())
         packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")
@@ -180,6 +181,15 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         ).decode("utf-8")
         packaged_default = archive.read(
             "sic_wafer_counter/resources/default.yaml"
+        ).decode("utf-8")
+        packaged_exporter = archive.read(
+            "sic_wafer_counter/result_export.py"
+        ).decode("utf-8")
+        packaged_template = archive.read(
+            "sic_wafer_counter/templates/index.html"
+        ).decode("utf-8")
+        packaged_results_js = archive.read(
+            "sic_wafer_counter/static/results.js"
         ).decode("utf-8")
     assert {
         "sic_wafer_counter/candidate_classifier.py",
@@ -196,6 +206,10 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
     assert "reference_image_sha256" in packaged_paper_alignment
     assert "generate_local_field_package: true" in packaged_default
     assert "local_field_size_mm: 4.0" in packaged_default
+    assert '"cu-style-fields": ExportBundle(' in packaged_exporter
+    assert "Cu-0008-R_style_local_fields.zip" in packaged_exporter
+    assert 'id="cu-style-fields-export"' in packaged_template
+    assert "exports['cu-style-fields']" in packaged_results_js
 
 
 def test_detail_comparison_contains_accepted_and_rejected_markers(tmp_path: Path) -> None:
