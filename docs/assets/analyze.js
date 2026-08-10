@@ -13,6 +13,8 @@ const results = document.querySelector("#results");
 const bundleDownload = document.querySelector("#bundle-download");
 const classifierInput = document.querySelector("#classifier-file");
 const classifierLine = document.querySelector("#classifier-line");
+const pixelClassifierInput = document.querySelector("#pixel-classifier-file");
+const pixelClassifierLine = document.querySelector("#pixel-classifier-line");
 
 const imageLabels = {
   "paper_aligned_result_figure.png": "论文式点状目标与整片密度综合成果",
@@ -26,6 +28,7 @@ const imageLabels = {
   "valid_analysis_mask.png": "最终有效区域",
   "candidate_mask.png": "候选二值掩膜",
   "preprocessed_preview.png": "暗目标响应",
+  "pixel_target_probability.png": "像素模型目标图像类概率（非物理缺陷类别概率）",
   "radial_density.png": "径向面积归一化密度",
   "angular_density.png": "角向面积归一化密度",
   "wafer_position_scatter.png": "晶圆目标位置",
@@ -64,6 +67,7 @@ function refreshStartButton() {
   analyzeButton.disabled = Boolean(worker) || !fileIsEligible;
   fileInput.disabled = Boolean(worker);
   classifierInput.disabled = Boolean(worker);
+  pixelClassifierInput.disabled = Boolean(worker);
   dropZone.setAttribute("aria-disabled", String(Boolean(worker)));
 }
 
@@ -149,6 +153,22 @@ async function readClassifierModel() {
   }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     throw new Error("候选分类器 JSON 顶层必须是对象。 ");
+  }
+  return parsed;
+}
+
+async function readPixelClassifierModel() {
+  const file = pixelClassifierInput.files?.[0];
+  if (!file) return null;
+  if (!/\.json$/i.test(file.name)) throw new Error("像素分割模型必须是 JSON 文件。 ");
+  if (file.size <= 0 || file.size > 16 * 1024 * 1024) {
+    throw new Error("像素分割模型 JSON 必须为非空且不超过 16 MiB。 ");
+  }
+  let parsed;
+  try { parsed = JSON.parse(await file.text()); }
+  catch { throw new Error("像素分割模型 JSON 无法解析。 "); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("像素分割模型 JSON 顶层必须是对象。 ");
   }
   return parsed;
 }
@@ -264,7 +284,11 @@ async function runAnalysis(event) {
   const generation = ++runGeneration;
   try {
     validateFile(runFile);
-    const options = {...readOptions(), classifier_model: await readClassifierModel()};
+    const options = {
+      ...readOptions(),
+      classifier_model: await readClassifierModel(),
+      pixel_classifier_model: await readPixelClassifierModel(),
+    };
     results.hidden = true;
     cleanupObjectUrls();
     analyzeButton.disabled = true;
@@ -312,6 +336,12 @@ classifierInput.addEventListener("change", () => {
   classifierLine.textContent = file
     ? `已选择 ${file.name}；开始分析时会核验模型结构与 SHA-256。`
     : "未导入模型；本次将使用透明形态与对比度规则。";
+});
+pixelClassifierInput.addEventListener("change", () => {
+  const file = pixelClassifierInput.files?.[0];
+  pixelClassifierLine.textContent = file
+    ? `已选择 ${file.name}；分析时将核验像素模型结构、特征顺序与 SHA-256。`
+    : "未导入像素模型；本次将使用传统暗点候选检测。";
 });
 for (const eventName of ["dragenter", "dragover"]) dropZone.addEventListener(eventName, (event) => {
   event.preventDefault();

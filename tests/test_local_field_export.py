@@ -39,6 +39,12 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
                 "classifier_probability": 0.91,
                 "classifier_decision": "target",
                 "decision_basis": "trained_candidate_classifier",
+                "pixel_model_applied": True,
+                "pixel_model_probability_mean": 0.87,
+                "pixel_model_probability_max": 0.97,
+                "pixel_model_threshold": 0.5,
+                "pixel_model_sha256": "b" * 64,
+                "pixel_segmentation_decision": "foreground_component",
                 "area_px": 20,
                 "equivalent_diameter_um": 5000.0,
             },
@@ -57,6 +63,12 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
                 "classifier_probability": 0.08,
                 "classifier_decision": "artifact",
                 "decision_basis": "trained_candidate_classifier",
+                "pixel_model_applied": True,
+                "pixel_model_probability_mean": 0.62,
+                "pixel_model_probability_max": 0.91,
+                "pixel_model_threshold": 0.5,
+                "pixel_model_sha256": "b" * 64,
+                "pixel_segmentation_decision": "foreground_component",
                 "area_px": 22,
                 "equivalent_diameter_um": 5200.0,
             },
@@ -82,6 +94,20 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
             "point_density_cm2": 1.0 / valid_area,
             "counting_uncertainty_cm2": 1.0 / valid_area,
             "decision_basis": "trained_candidate_classifier",
+            "pixel_classifier": {
+                "status": "applied",
+                "model_sha256": "b" * 64,
+                "probability_threshold": 0.5,
+                "validation": {"status": "not_evaluated_yet"},
+                "training_sources": [
+                    {
+                        "image_sha256": "c" * 64,
+                        "wafer_id": "wafer-A",
+                        "split": "calibration",
+                        "roi_xywh": [0, 0, 100, 100],
+                    }
+                ],
+            },
             "candidate_classifier": {"model_sha256": "a" * 64},
             "real_annotation_validation_status": "not validated on real SiC data",
             "software_version": "test",
@@ -112,6 +138,9 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
         assert "最终有效分析面积 S" in overview_xml
         assert "trained_candidate_classifier" in overview_xml
         assert "分类器模型 SHA-256" in overview_xml
+        assert "像素模型 SHA-256" in overview_xml
+        assert "b" * 64 in overview_xml
+        assert "not_evaluated_yet" in overview_xml
         assert "未提供独立 DIC/KOH" in overview_xml
 
     field_dirs = sorted(path for path in (tmp_path / "local_fields").iterdir() if path.is_dir())
@@ -133,6 +162,8 @@ def test_local_field_package_exports_all_valid_fields_and_preserves_raw_pixels(
         assert "trained_candidate_classifier" in field_overview
         assert "classifier_probability" in candidate_sheet
         assert "rule_rejection_reason" in candidate_sheet
+        assert "pixel_model_probability_mean" in candidate_sheet
+        assert "pixel_model_sha256" in candidate_sheet
     raw = tifffile.imread(candidate_one_field / "03_raw_original.tif")
     assert np.array_equal(raw, source[25:50, 25:50])
 

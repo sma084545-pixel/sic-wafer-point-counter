@@ -28,6 +28,7 @@
       <nav aria-label="页面导航">
         <a href="#upload">上传与参数</a>
         <a href="#results">分析结果</a>
+        <a href="train.html">图像交互训练</a>
         <a href="index.html">项目说明</a>
       </nav>
     </div>
@@ -68,10 +69,15 @@
             <label><span>候选阈值</span><select id="threshold-method"><option value="otsu">多类 Otsu（默认）</option><option value="adaptive">自适应阈值</option><option value="quantile">响应分位数</option></select></label>
             <label class="check-field"><input id="watershed" type="checkbox" checked><span>分水岭分离粘连点</span></label>
           </div>
+          <label class="classifier-file" for="pixel-classifier-file">
+            <span>可选：导入图像交互训练得到的像素分割模型 JSON</span>
+            <input id="pixel-classifier-file" type="file" accept=".json,application/json">
+            <small id="pixel-classifier-line" aria-live="polite">未导入像素模型；本次将使用传统暗点候选检测。</small>
+          </label>
           <label class="classifier-file" for="classifier-file">
-            <span>可选：导入本机工作台训练的分类器 JSON</span>
+            <span>可选：导入本机工作台训练的分类器 JSON（v0.3 候选级二次分类）</span>
             <input id="classifier-file" type="file" accept=".json,application/json">
-            <small id="classifier-line" aria-live="polite">未导入模型；本次将使用透明形态与对比度规则。</small>
+            <small id="classifier-line" aria-live="polite">未导入候选级模型；候选仍由透明形态与对比度规则终审。</small>
           </label>
         </fieldset>
 
@@ -147,7 +153,7 @@
 
     <section class="local-fallback shell" aria-labelledby="large-title">
       <h2 id="large-title">超过网页安全清单的 TIFF / BigTIFF 请使用本机工作台</h2>
-      <p>网页允许选择最高 100 MiB，但仍会按格式、源像素、单边尺寸、有界随机访问能力和输出包大小逐层预检。任一条件不满足都会明确停止，不会静默压缩、降采样或展示不可靠密度。GitHub 下载的本机工作台提供专家候选标注与训练窗口；训练得到的 JSON 可回传本页复用。它还提供逐项原文件下载、“全部局部分析包”，以及新增的“Cu-0008-R 格式顺序三联件 ZIP”：第一项为全局 Excel，随后每个有效 4 mm 视场按红框图、位置 Excel、原始数值 TIFF 在扁平目录中顺序排列。该大体量导出不会在静态网页内伪装生成。</p>
+      <p>网页允许选择最高 100 MiB，但仍会按格式、源像素、单边尺寸、有界随机访问能力和输出包大小逐层预检。任一条件不满足都会明确停止，不会静默压缩、降采样或展示不可靠密度。可先在<a href="train.html">图像交互训练页</a>用原图 ROI 画笔训练像素模型，再把模型导入本页分块应用。GitHub 下载的本机工作台还提供跨晶圆训练集管理、逐项原文件下载、“全部局部分析包”，以及“Cu-0008-R 格式顺序三联件 ZIP”。</p>
       <a href="https://github.com/sma084545-pixel/sic-wafer-point-counter#readme">查看本机安装与运行说明 <span aria-hidden="true">→</span></a>
     </section>
   </main>

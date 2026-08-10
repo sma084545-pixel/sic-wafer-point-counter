@@ -111,6 +111,12 @@ DEFECT_COLUMNS: tuple[str, ...] = (
     "distance_to_wafer_edge_mm",
     "accepted",
     "rejection_reason",
+    "pixel_model_applied",
+    "pixel_model_probability_mean",
+    "pixel_model_probability_max",
+    "pixel_model_threshold",
+    "pixel_model_sha256",
+    "pixel_segmentation_decision",
     "crop_path",
 )
 
@@ -1142,6 +1148,7 @@ _REPORT_TEMPLATE = r"""<!doctype html>
     <li><a href="defects_rejected.csv">自动拒绝目标</a></li>
     {% if candidate_crops_available %}<li><a href="candidate_crops/">原始数值 TIFF 候选裁剪及显示预览</a></li>{% endif %}
     {% if local_field_export_available %}<li><a href="local_fields/00_global_overview.xlsx">局部视场全局 Excel 总表</a></li>{% endif %}
+    {% if pixel_classifier_available %}<li><a href="pixel_classifier.json">本次像素分割模型（含特征、标签来源、阈值与哈希）</a></li>{% endif %}
     <li><a href="analysis_config.yaml">本次实际参数</a></li>
     <li><a href="radial_density.csv">径向密度（有效面积归一化）</a></li>
     <li><a href="angular_density.csv">方位角密度（有效面积归一化）</a></li>
@@ -1191,6 +1198,8 @@ def generate_html_report(
         ("中心/中间/边缘密度", ("regional_density_display",)),
         ("真实标注验证状态", ("real_annotation_validation_status",)),
         ("不确定度预算", ("uncertainty_budget_display",)),
+        ("像素分割模型", ("pixel_classifier_display",)),
+        ("方法链对照", ("method_comparison_display",)),
         ("运行时间", ("runtime_seconds",)),
     )
     display_summary = dict(summary)
@@ -1249,6 +1258,30 @@ def generate_html_report(
         display_summary["uncertainty_budget_display"] = "; ".join(
             f"{key}: {value}" for key, value in uncertainty_budget.items()
         )
+    pixel_classifier = summary.get("pixel_classifier")
+    if isinstance(pixel_classifier, Mapping) and pixel_classifier.get("status") == "applied":
+        validation = pixel_classifier.get("validation")
+        validation_status = (
+            validation.get("status", "not quantified")
+            if isinstance(validation, Mapping)
+            else "not quantified"
+        )
+        display_summary["pixel_classifier_display"] = (
+            f"applied; threshold={pixel_classifier.get('probability_threshold')}; "
+            f"sha256={pixel_classifier.get('model_sha256')}; validation={validation_status}"
+        )
+    else:
+        display_summary["pixel_classifier_display"] = "disabled"
+    method_comparison = summary.get("method_comparison")
+    if isinstance(method_comparison, Mapping):
+        rules = method_comparison.get("configured_rule_filter", {})
+        candidate = method_comparison.get("candidate_classifier", {})
+        display_summary["method_comparison_display"] = (
+            f"rules accepted={rules.get('accepted_count', '—')}; "
+            f"candidate stage={candidate.get('status', 'disabled')}; "
+            f"final n={method_comparison.get('final_accepted_count', '—')}; "
+            "accuracy comparison requires common held-out expert labels"
+        )
     rows: list[tuple[str, Any]] = []
     for label, keys in label_keys:
         value = _summary_value(display_summary, *keys, default="—")
@@ -1277,6 +1310,9 @@ def generate_html_report(
         "valid_analysis_mask.png": "最终有效分析掩膜",
         "preprocessed_preview.png": "预处理响应预览",
         "candidate_mask.png": "候选二值掩膜",
+        "pixel_target_probability.png": (
+            "像素模型目标图像类概率预览（非 TSD/TED/BPD 物理类别概率）"
+        ),
         "defect_size_histogram.png": "目标尺寸分布",
         "radial_distribution.png": "径向计数（非面积归一化，仅供描述）",
         "angular_distribution.png": "方位角计数（非面积归一化，仅供描述）",
@@ -1314,6 +1350,7 @@ def generate_html_report(
         local_field_export_available=(folder / "local_fields/00_global_overview.xlsx").is_file(),
         density_heatmap_grid_available=(folder / "density_heatmap_grid.csv").is_file(),
         independent_reference_available=(folder / "independent_reference_points.csv").is_file(),
+        pixel_classifier_available=(folder / "pixel_classifier.json").is_file(),
     )
     path = folder / "report.html"
     path.write_text(report, encoding="utf-8")

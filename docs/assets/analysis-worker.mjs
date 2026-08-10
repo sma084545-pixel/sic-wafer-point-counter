@@ -428,6 +428,11 @@ if classifier_model is not None:
     config["classifier"]["enabled"] = True
     config["classifier"]["model_path"] = None
     config["classifier"]["model"] = classifier_model
+pixel_classifier_model = options.get("pixel_classifier_model")
+if pixel_classifier_model is not None:
+    config["pixel_classifier"]["enabled"] = True
+    config["pixel_classifier"]["model_path"] = None
+    config["pixel_classifier"]["model"] = pixel_classifier_model
 
 is_tiff = bool(options["source_metadata"]["is_tiff"])
 if is_tiff:
@@ -464,6 +469,8 @@ summary["browser_runtime"] = {
     "candidate_crops_saved": False,
     "candidate_classifier_supplied": classifier_model is not None,
     "candidate_classifier_model_sha256": summary.get("candidate_classifier", {}).get("model_sha256"),
+    "pixel_classifier_supplied": pixel_classifier_model is not None,
+    "pixel_classifier_model_sha256": summary.get("pixel_classifier", {}).get("model_sha256"),
     "limit_tier": options["limit_tier"],
     "source_axes": options["source_metadata"]["axes"],
     "source_shape": options["source_metadata"]["shape"],

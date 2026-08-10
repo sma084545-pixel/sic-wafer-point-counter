@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 from importlib import resources
+import io
 import logging
 import math
 from pathlib import Path
@@ -31,6 +32,10 @@ from werkzeug.utils import secure_filename
 from . import __version__
 from .image_io import ImageReadError
 from .pipeline import analyze_image
+from .pixel_training_repository import (
+    PixelTrainingRepository,
+    PixelTrainingRepositoryError,
+)
 from .result_export import EXPORT_BUNDLES, ResultExporter
 from .run_repository import RunRepository, RunRepositoryError, public_json
 from .training_repository import TrainingRepository, TrainingRepositoryError
@@ -223,6 +228,7 @@ class _JobManager:
                 "report.html", "summary.json", "defects_all.csv", "defects_accepted.csv",
                 "defects_rejected.csv", "overlay_accepted.png", "overlay_all_candidates.png",
                 "candidate_classifier.json",
+                "pixel_classifier.json", "pixel_target_probability.png",
                 "overlay_xrt_red_boxes.png", "xrt_detection_detail_montage.png",
                 "paper_detection_field.png", "paper_aligned_result_figure.png",
                 "defect_comparison_details.png",
@@ -337,10 +343,12 @@ def create_app(
     repository = RunRepository(manager.result_root)
     exporter = ResultExporter(repository)
     training = TrainingRepository(root, repository)
+    pixel_training = PixelTrainingRepository(root, load_config(DEFAULT_CONFIG_PATH))
     app.extensions["sic_wafer_job_manager"] = manager
     app.extensions["sic_wafer_run_repository"] = repository
     app.extensions["sic_wafer_result_exporter"] = exporter
     app.extensions["sic_wafer_training_repository"] = training
+    app.extensions["sic_wafer_pixel_training_repository"] = pixel_training
 
     demo_sources = {
         kind: root / "sample_data" / "generated" / f"synthetic_{kind}.png"
@@ -383,6 +391,17 @@ def create_app(
             software_version=__version__,
             git_revision=_git_revision(root),
             demo_available={name: path.is_file() for name, path in demo_sources.items()},
+        )
+
+    @app.get("/pixel-training")
+    def pixel_training_page() -> str:
+        """Serve the source-image brush training workspace."""
+
+        return render_template(
+            "pixel_training.html",
+            max_upload_mb=max_upload_mb,
+            software_version=__version__,
+            git_revision=_git_revision(root),
         )
 
     @app.get("/api/health")
@@ -431,6 +450,23 @@ def create_app(
             config = deep_merge(
                 config,
                 {"classifier": {"enabled": True, "model_path": None, "model": model}},
+            )
+        if request.form.get("use_pixel_classifier") == "true":
+            try:
+                pixel_model = pixel_training.active_model()
+            except PixelTrainingRepositoryError as exc:
+                return jsonify({"error": str(exc)}), 400
+            if pixel_model is None:
+                return jsonify({"error": "尚未训练可用的像素级模型"}), 400
+            config = deep_merge(
+                config,
+                {
+                    "pixel_classifier": {
+                        "enabled": True,
+                        "model_path": None,
+                        "model": pixel_model,
+                    }
+                },
             )
         upload_id = uuid4().hex
         upload_dir = manager.upload_root / upload_id
@@ -717,6 +753,180 @@ def create_app(
             as_attachment=True,
             download_name="candidate_annotations.csv",
             mimetype="text/csv",
+            conditional=True,
+        )
+
+    @app.get("/api/pixel-training/projects")
+    def list_pixel_training_projects():
+        try:
+            return jsonify({
+                "projects": pixel_training.list_projects(),
+                "model_available": pixel_training.active_model() is not None,
+            })
+        except PixelTrainingRepositoryError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/pixel-training/projects")
+    def create_pixel_training_project():
+        if "image" not in request.files:
+            return jsonify({"error": "请选择用于像素标注的原始图像"}), 400
+        image = request.files["image"]
+        original_name = Path(image.filename or "").name
+        suffix = Path(original_name).suffix.lower()
+        if not original_name or suffix not in ALLOWED_SUFFIXES:
+            return jsonify({"error": "像素训练仅支持 PNG、JPG、BMP、TIFF 或 BigTIFF"}), 400
+        upload_root = root / "training" / "pixel_uploads"
+        upload_root.mkdir(parents=True, exist_ok=True)
+        upload = upload_root / f"{uuid4().hex}{suffix}"
+        try:
+            image.save(upload)
+            if upload.stat().st_size <= 0:
+                raise PixelTrainingRepositoryError("上传训练图像为空")
+            project = pixel_training.create_project(
+                upload,
+                original_name=original_name,
+                wafer_id=str(request.form.get("wafer_id", "")).strip(),
+                split=str(request.form.get("split", "calibration")),
+                reviewer_id=str(request.form.get("reviewer_id", "local_expert")),
+                move_source=True,
+            )
+            return jsonify({"project": project}), 201
+        except (OSError, ValueError, ImageReadError, PixelTrainingRepositoryError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        finally:
+            upload.unlink(missing_ok=True)
+
+    @app.get("/api/pixel-training/projects/<project_id>")
+    def get_pixel_training_project(project_id: str):
+        try:
+            return jsonify({"project": pixel_training.public_project(project_id)})
+        except PixelTrainingRepositoryError as exc:
+            return jsonify({"error": str(exc)}), 404
+
+    @app.get("/api/pixel-training/projects/<project_id>/preview")
+    def pixel_training_preview(project_id: str):
+        try:
+            return send_file(pixel_training.preview_path(project_id), mimetype="image/png", conditional=True)
+        except PixelTrainingRepositoryError:
+            abort(404)
+
+    @app.get("/api/pixel-training/projects/<project_id>/roi")
+    def pixel_training_roi(project_id: str):
+        try:
+            roi = tuple(int(request.args[name]) for name in ("x", "y", "width", "height"))
+            payload = pixel_training.roi_png(project_id, roi)
+        except (KeyError, TypeError, ValueError, PixelTrainingRepositoryError) as exc:
+            return jsonify({"error": str(exc)}), 400
+        return send_file(io.BytesIO(payload), mimetype="image/png", download_name="training_roi.png")
+
+    @app.post("/api/pixel-training/projects/<project_id>/annotations")
+    def save_pixel_training_annotation(project_id: str):
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "请求必须包含像素标签 JSON"}), 400
+        try:
+            annotation = pixel_training.save_annotation(
+                project_id,
+                annotation_id=(
+                    str(payload["annotation_id"]) if payload.get("annotation_id") else None
+                ),
+                roi_xywh=payload.get("roi_xywh", ()),
+                labels_rle=payload.get("labels", {}),
+            )
+            project = pixel_training.public_project(project_id)
+            return jsonify({"annotation": annotation, "project": project})
+        except (ValueError, PixelTrainingRepositoryError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/pixel-training/train")
+    def train_pixel_model():
+        payload = request.get_json(silent=True)
+        values = payload if isinstance(payload, Mapping) else {}
+        try:
+            model = pixel_training.train(
+                probability_threshold=float(values.get("probability_threshold", 0.5)),
+                minimum_object_area_px=int(values.get("minimum_object_area_px", 5)),
+                n_trees=int(values.get("n_trees", 32)),
+                random_seed=int(values.get("random_seed", 1729)),
+            )
+            return jsonify({"model": model})
+        except (TypeError, ValueError, PixelTrainingRepositoryError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.post("/api/pixel-training/projects/<project_id>/predict/<annotation_id>")
+    def predict_pixel_training_roi(project_id: str, annotation_id: str):
+        payload = request.get_json(silent=True)
+        values = payload if isinstance(payload, Mapping) else {}
+        try:
+            threshold = values.get("probability_threshold")
+            minimum = values.get("minimum_object_area_px")
+            report = pixel_training.predict_annotation(
+                project_id,
+                annotation_id,
+                threshold=(None if threshold is None else float(threshold)),
+                minimum_object_area_px=(None if minimum is None else int(minimum)),
+            )
+            files = {
+                kind: url_for(
+                    "pixel_training_prediction_file",
+                    project_id=project_id,
+                    annotation_id=annotation_id,
+                    name=Path(relative).name,
+                )
+                for kind, relative in report["files"].items()
+            }
+            report["files"] = files
+            return jsonify({"prediction": report})
+        except (TypeError, ValueError, PixelTrainingRepositoryError) as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get(
+        "/api/pixel-training/projects/<project_id>/predictions/<annotation_id>/<name>"
+    )
+    def pixel_training_prediction_file(project_id: str, annotation_id: str, name: str):
+        try:
+            path = pixel_training.prediction_file(project_id, annotation_id, name)
+        except PixelTrainingRepositoryError:
+            abort(404)
+        return send_file(path, as_attachment=request.args.get("download") == "1", conditional=True)
+
+    @app.get("/api/pixel-training/model")
+    def download_pixel_model():
+        try:
+            if pixel_training.active_model() is None:
+                abort(404)
+        except PixelTrainingRepositoryError:
+            abort(404)
+        return send_file(
+            pixel_training.model_path,
+            as_attachment=True,
+            download_name="pixel_classifier.json",
+            mimetype="application/json",
+            conditional=True,
+        )
+
+    @app.post("/api/pixel-training/model")
+    def import_pixel_model():
+        payload = request.get_json(silent=True)
+        if not isinstance(payload, Mapping):
+            return jsonify({"error": "请求必须包含像素模型 JSON"}), 400
+        try:
+            model = pixel_training.install_model(payload)
+            return jsonify({"model": model})
+        except PixelTrainingRepositoryError as exc:
+            return jsonify({"error": str(exc)}), 400
+
+    @app.get("/api/pixel-training/projects/<project_id>/download")
+    def download_pixel_training_project(project_id: str):
+        try:
+            path = pixel_training.project_file(project_id)
+        except PixelTrainingRepositoryError:
+            abort(404)
+        return send_file(
+            path,
+            as_attachment=True,
+            download_name=f"{project_id}.sictrain.json",
+            mimetype="application/json",
             conditional=True,
         )
 

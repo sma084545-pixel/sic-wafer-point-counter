@@ -40,6 +40,12 @@ CANDIDATE_COLUMNS = (
     "classifier_probability",
     "classifier_decision",
     "decision_basis",
+    "pixel_model_applied",
+    "pixel_model_probability_mean",
+    "pixel_model_probability_max",
+    "pixel_model_threshold",
+    "pixel_model_sha256",
+    "pixel_segmentation_decision",
     "area_px",
     "area_mm2",
     "equivalent_diameter_um",
@@ -343,6 +349,52 @@ def _global_workbook(
         ["最终拒绝数量", summary.get("rejected_count"), "保留规则与最终拒绝原因"],
         ["最终判定依据", summary.get("decision_basis"), "规则或训练分类器"],
         [
+            "像素分割模型状态",
+            (summary.get("pixel_classifier") or {}).get("status")
+            if isinstance(summary.get("pixel_classifier"), Mapping)
+            else "disabled",
+            "原图画笔标签训练；只提出前景像素",
+        ],
+        [
+            "像素模型 SHA-256",
+            (summary.get("pixel_classifier") or {}).get("model_sha256")
+            if isinstance(summary.get("pixel_classifier"), Mapping)
+            else None,
+            "每个候选同时保留概率与阈值",
+        ],
+        [
+            "像素概率阈值",
+            (summary.get("pixel_classifier") or {}).get("probability_threshold")
+            if isinstance(summary.get("pixel_classifier"), Mapping)
+            else None,
+            "模型前景分割阈值",
+        ],
+        [
+            "像素模型验证状态",
+            ((summary.get("pixel_classifier") or {}).get("validation") or {}).get("status")
+            if isinstance(summary.get("pixel_classifier"), Mapping)
+            else None,
+            "训练集表现不等于独立验证",
+        ],
+        [
+            "像素模型训练来源数量",
+            len((summary.get("pixel_classifier") or {}).get("training_sources", []))
+            if isinstance(summary.get("pixel_classifier"), Mapping)
+            else 0,
+            "按原图 SHA-256、wafer_id、split 与 ROI 追溯",
+        ],
+        [
+            "像素模型训练来源",
+            json.dumps(
+                (summary.get("pixel_classifier") or {}).get("training_sources", []),
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            if isinstance(summary.get("pixel_classifier"), Mapping)
+            else "[]",
+            "calibration/validation/locked_test 不得跨晶圆泄漏",
+        ],
+        [
             "分类器模型 SHA-256",
             (summary.get("candidate_classifier") or {}).get("model_sha256")
             if isinstance(summary.get("candidate_classifier"), Mapping)
@@ -401,9 +453,11 @@ def _global_workbook(
             SheetSpec(
                 "全局概览",
                 rows=lambda rows=overview_rows: iter(rows),
-                column_widths=(30, 34, 48),
+                column_widths=(30, 48, 48),
                 title_rows=frozenset({1}),
                 header_rows=frozenset({4}),
+                wrap_rows=frozenset({2, 10, 11, 12, 14, 15, 16, 17, 23, 24}),
+                row_heights={2: 30, 10: 34, 11: 34, 12: 34, 14: 30, 15: 30, 16: 72, 17: 30, 23: 30, 24: 30},
                 freeze_rows=4,
             ),
             SheetSpec(

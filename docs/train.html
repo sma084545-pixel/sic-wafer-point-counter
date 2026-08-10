@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#f3f7f6">
+  <meta name="description" content="在浏览器中直接标注 SiC XRT 原图 ROI、训练像素模型并查看概率与分割预览。">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'wasm-unsafe-eval' 'unsafe-eval'; worker-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; img-src 'self' blob: data:; style-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'">
+  <title>图像交互训练｜SiC 晶圆点状目标平台</title>
+  <link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="assets/pixel-training.css?v=20260810c">
+  <script type="module" src="assets/pixel-training.js?v=20260810c"></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">跳到训练工作区</a>
+  <header class="topbar"><a class="brand" href="index.html">SiC 晶圆 <span>浏览器像素训练</span></a><nav><a href="analyze.html">应用模型分析</a><a href="index.html">项目说明</a></nav></header>
+  <main id="main">
+    <section class="hero"><div><p class="eyebrow">用户监督 · 原图像素标签 · Web Worker</p><h1>直接在原图 ROI 上训练像素分割模型</h1><p>红色画目标，绿色画背景/伪影，黄色画忽略区。模型学习的是图像类别，不是已经确认的 TSD/TED/BPD。</p></div><aside><strong>数据不上传</strong><p>原图只读挂载到浏览器 Worker。大 TIFF 只读取预览和选中 ROI；网页不会静默缩图训练。</p></aside></section>
+
+    <section class="card source-card">
+      <div class="heading"><div><span>01</span><h2>原图与训练项目</h2></div></div>
+      <div class="source-grid">
+        <label class="file-drop">选择原始图像<input id="source-file" type="file" accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.btf,.bigtif,.bigtiff"><small id="source-file-line">先选择图像；项目 JSON 不嵌入原始像素。</small></label>
+        <div class="project-fields"><label>wafer_id<input id="wafer-id" value="wafer_browser_001"></label><label>标注者 ID<input id="reviewer-id" value="browser_expert"></label><label>数据用途<select id="split"><option value="calibration">calibration 训练</option><option value="validation">validation 验证</option><option value="locked_test">locked test 锁定测试</option></select></label></div>
+      </div>
+      <div class="actions"><button class="button primary" id="open-source" type="button">载入原图预览</button><label class="button secondary upload-button">打开训练项目<input id="project-file" type="file" accept=".json,.sictrain.json,application/json"></label><label class="button secondary upload-button">载入像素模型<input id="model-file" type="file" accept=".json,application/json"></label></div>
+      <p class="status" id="status" role="status">等待选择原始图像。</p><p class="error" id="error" role="alert" hidden></p>
+    </section>
+
+    <section id="workspace" class="workspace" hidden>
+      <section class="card overview-card"><div class="heading"><div><span>02</span><h2>选择源分辨率 ROI</h2></div><small id="source-meta"></small></div><p>在预览图拖框，或直接输入原始像素坐标。浏览器 ROI 边长限制为 32–1024 px；本机版可到 2048 px。</p><div class="overview-stage"><canvas id="overview-canvas" aria-label="整图预览，可拖框选择 ROI"></canvas></div><div class="roi-fields"><label>x<input id="roi-x" type="number" min="0" value="0"></label><label>y<input id="roi-y" type="number" min="0" value="0"></label><label>宽<input id="roi-width" type="number" min="32" max="1024" value="512"></label><label>高<input id="roi-height" type="number" min="32" max="1024" value="512"></label><button class="button primary" id="load-roi" type="button">载入 ROI</button></div></section>
+
+      <section class="card controls-card"><div class="heading"><div><span>03</span><h2>标签与工具</h2></div></div><fieldset class="toolset"><legend>工具</legend><button class="tool active" data-tool="brush" type="button">画笔</button><button class="tool" data-tool="erase" type="button">橡皮擦</button><button class="tool" data-tool="pan" type="button">平移</button></fieldset><fieldset class="toolset"><legend>类别</legend><button class="label target active" data-label="1" type="button">目标/前景</button><button class="label background" data-label="2" type="button">背景/伪影</button><button class="label ignore" data-label="3" type="button">忽略/不确定</button></fieldset><label>画笔直径 <output id="brush-size-value">9 px</output><input id="brush-size" type="range" min="1" max="101" step="2" value="9"></label><div class="tool-actions"><button id="undo" type="button">撤销</button><button id="redo" type="button">重做</button><button id="fit-view" type="button">适合窗口</button><button id="toggle-labels" type="button" aria-pressed="true">隐藏标签</button></div><label>清除单类<select id="clear-class"><option value="1">目标</option><option value="2">背景</option><option value="3">忽略</option><option value="all">全部</option></select></label><button class="button danger" id="clear-labels" type="button">执行清除</button><dl class="counts"><div><dt>目标</dt><dd id="count-target">0</dd></div><div><dt>背景</dt><dd id="count-background">0</dd></div><div><dt>忽略</dt><dd id="count-ignore">0</dd></div></dl></section>
+
+      <section class="card canvas-card"><div class="heading"><div><span>04</span><h2>源像素标注画布</h2><p>滚轮缩放；空格或平移工具拖动；标签坐标始终对应 ROI 原始像素。</p></div><small id="viewport-status">尚未载入 ROI</small></div><div class="annotation-stage" id="annotation-stage"><canvas id="annotation-canvas" aria-label="源分辨率像素标注画布"></canvas><div id="canvas-placeholder">先选择并载入 ROI</div></div></section>
+
+      <section class="card train-card"><div class="heading"><div><span>05</span><h2>训练、预测与继续纠错</h2></div></div><div class="train-controls"><label>概率阈值<input id="pixel-threshold" type="number" min="0.05" max="0.95" step="0.01" value="0.50"></label><label>最小目标面积 px<input id="pixel-min-area" type="number" min="1" value="5"></label><label>树数<select id="pixel-trees"><option>16</option><option selected>32</option><option>48</option></select></label><label>固定种子<input id="pixel-seed" type="number" value="1729"></label></div><div class="actions"><button class="button secondary" id="save-project" type="button">整理并保存训练项目</button><button class="button secondary" id="download-project" type="button" disabled>下载训练项目 JSON</button><button class="button primary" id="train-model" type="button">训练并生成即时预览</button><button class="button secondary" id="apply-model" type="button">用当前模型重新预测 ROI</button><button class="button secondary" id="download-model" type="button" disabled>下载模型 JSON</button></div><p class="status" id="training-status">请先标注至少 20 个目标像素和 20 个背景像素。</p><div id="prediction-grid" class="prediction-grid" hidden><figure><img id="probability-preview" alt="目标图像类概率图"><figcaption>目标图像类概率（不是物理缺陷类别概率）</figcaption></figure><figure><img id="segmentation-preview" alt="阈值分割掩膜"><figcaption>阈值与最小面积后的分割</figcaption></figure><figure><img id="overlay-preview" alt="人工标签与模型预测叠加"><figcaption>红/绿/黄人工标签；洋红预测边界</figcaption></figure></div><div id="metrics" class="metrics" hidden></div></section>
+    </section>
+
+    <section class="card guide"><h2>验证与应用</h2><p>浏览器单图训练只能展示当前 ROI 的即时表现，不能替代按晶圆隔离的 validation / locked test。下载模型后，在<a href="analyze.html">浏览器分析页</a>导入同一像素模型即可按重叠 tile 应用于完整晶圆；最终目标仍需通过有效掩膜、边缘与形态规则。</p></section>
+  </main>
+  <footer>SiC 晶圆点状目标平台 · 真实准确率需要独立专家标注验证</footer>
+</body>
+</html>

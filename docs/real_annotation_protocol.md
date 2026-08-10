@@ -16,6 +16,12 @@
 
 训练拟合指标不能当作真实准确率。只有独立 `validation` 或 `locked_test` 同时含正负类时，模型文件才附带留出指标；这些指标仍只验证“专家图像候选标签”，不构成 TSD、TED 或 BPD 的物理身份确认。模型 JSON 带内容 SHA-256，可下载后导入 GitHub Pages 浏览器分析页复用；每次应用都会把模型哈希、阈值、概率、规则判定和最终判定写入结果。
 
+## 原图像素交互训练
+
+像素项目保存原图 SHA-256、wafer_id、split、标注者、ROI 原始像素坐标、无损标签 RLE、类别定义、特征配置、固定种子、训练参数、模型、验证状态和操作历史。目标、背景和 ignore 必须分开；ignore 不能被当作负类。训练项目 JSON 不嵌入原始像素，重新打开时必须核对同一原图哈希。
+
+按晶圆防泄漏同时检查 `wafer_id` 与原图 SHA-256。calibration 才参与拟合；validation 和 locked_test 只评分。报告应分别提供像素 precision/recall/F1/IoU、目标 precision/recall/F1、FP/FN 和定位误差。当前 ROI 的训练表现只用于交互纠错；没有独立真实 SiC 标签时，验证状态必须保持“尚不能证明真实准确率提升”。
+
 验证匹配优先使用毫米坐标和 `matching_tolerance_um`。报告 TP、FP、FN、precision、recall、F1、每 cm² 的 FP/FN、自动与人工的 n/rho 差值以及 Bland–Altman 表。若标注覆盖并不完整，未匹配自动目标标为不确定，precision/F1 不应作为完整性能声明。
 
 标注中的 `source_image_sha256` 在原图仍可访问时会自动核验；哈希不一致或同一图存在互相冲突的声明哈希会停止验证。原图已归档或不可访问时报告 `source_file_unavailable_for_verification`，不能把它当作已核验。

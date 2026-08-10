@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#f5f7f7">
+  <meta name="description" content="SiC XRT 原图像素级交互训练工作区">
+  <title>图像交互训练 | SiC 晶圆点状目标分析平台</title>
+  <link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml">
+  <link rel="stylesheet" href="{{ url_for('static', filename='pixel_training.css') }}">
+</head>
+<body data-version="{{ software_version }}" data-max-upload-mb="{{ max_upload_mb }}">
+  <a class="skip-link" href="#main">跳到训练工作区</a>
+  <header class="topbar">
+    <a href="/" class="brand">SiC 晶圆 <span>像素级交互训练</span></a>
+    <nav><a href="/">返回分析工作台</a><a href="#guide">操作说明</a></nav>
+  </header>
+
+  <main id="main">
+    <section class="hero">
+      <div><p class="eyebrow">用户监督 · 原图像素标签 · 可审计模型</p><h1>直接在原图 ROI 上训练像素分割模型</h1><p>画出目标前景、背景/伪影与忽略区域，训练后立即查看目标概率图、分割掩膜和叠加预览，再继续纠错。</p></div>
+      <aside><strong>科学边界</strong><p>模型学习的是专家定义的图像类别，不会自动把暗点证明为 TSD、TED、BPD 或其他物理位错。</p><label class="file-drop">载入可移植像素模型<input id="import-pixel-model" type="file" accept=".json,application/json"><small>将核验模型结构、特征顺序和 SHA-256。</small></label></aside>
+    </section>
+
+    <section class="project-grid">
+      <form id="new-project-form" class="card" enctype="multipart/form-data">
+        <div class="heading"><div><span>01</span><h2>创建训练项目</h2></div></div>
+        <label class="file-drop">选择原始图像
+          <input id="project-image" name="image" type="file" accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.btf,.bigtif,.bigtiff" required>
+          <small id="project-file-line">支持 ImageJ TIFF / BigTIFF；原图仅保存在本机 training/</small>
+        </label>
+        <div class="form-row"><label>wafer_id<input name="wafer_id" required placeholder="例如 wafer_0008"></label><label>标注者 ID<input name="reviewer_id" required value="local_expert" maxlength="80"></label><label>数据用途<select name="split"><option value="calibration">calibration 训练</option><option value="validation">validation 验证</option><option value="locked_test">locked test 锁定测试</option></select></label></div>
+        <button class="button primary" type="submit">创建并载入预览</button>
+        <p id="project-error" class="error" role="alert" hidden></p>
+      </form>
+
+      <section class="card">
+        <div class="heading"><div><span>02</span><h2>继续已有项目</h2></div><button id="refresh-projects" class="link-button" type="button">刷新</button></div>
+        <div id="project-list" class="project-list" aria-live="polite">正在读取本机项目…</div>
+      </section>
+    </section>
+
+    <section id="training-workspace" class="training-workspace" hidden>
+      <header class="workspace-heading"><div><p class="eyebrow">当前项目</p><h2 id="current-project-title">—</h2><p id="current-project-meta">—</p></div><div class="header-actions"><a id="download-project" class="button secondary" download>下载训练项目</a><a id="download-pixel-model" class="button secondary" href="/api/pixel-training/model" download="pixel_classifier.json" hidden>下载当前像素模型</a></div></header>
+
+      <div class="workspace-grid">
+        <section class="card overview-card">
+          <div class="heading"><div><span>03</span><h2>选择原图 ROI</h2></div></div>
+          <p>在整图预览上拖框，坐标会映射回原始像素。ROI 使用源分辨率读取，边长限制为 32–2048 px。</p>
+          <div class="overview-stage"><canvas id="overview-canvas" aria-label="原图预览，拖动选择训练 ROI"></canvas></div>
+          <div class="roi-fields"><label>x<input id="roi-x" type="number" min="0" step="1"></label><label>y<input id="roi-y" type="number" min="0" step="1"></label><label>宽<input id="roi-width" type="number" min="32" max="2048" step="1" value="512"></label><label>高<input id="roi-height" type="number" min="32" max="2048" step="1" value="512"></label><button id="load-roi" class="button primary" type="button">载入源分辨率 ROI</button></div>
+        </section>
+
+        <section class="card controls-card">
+          <div class="heading"><div><span>04</span><h2>画笔与标签</h2></div></div>
+          <fieldset class="toolset"><legend>工具</legend><button class="tool active" data-tool="brush" type="button">画笔</button><button class="tool" data-tool="erase" type="button">橡皮擦</button><button class="tool" data-tool="pan" type="button">平移</button></fieldset>
+          <fieldset class="toolset"><legend>类别</legend><button class="label target active" data-label="1" type="button">目标/前景</button><button class="label background" data-label="2" type="button">背景/伪影</button><button class="label ignore" data-label="3" type="button">忽略/不确定</button></fieldset>
+          <label>画笔直径 <output id="brush-size-value">9 px</output><input id="brush-size" type="range" min="1" max="101" step="2" value="9"></label>
+          <div class="tool-actions"><button id="undo" type="button">撤销</button><button id="redo" type="button">重做</button><button id="fit-view" type="button">适合窗口</button><button id="toggle-labels" type="button" aria-pressed="true">隐藏标签</button></div>
+          <label>清除单类<select id="clear-class"><option value="1">目标/前景</option><option value="2">背景/伪影</option><option value="3">忽略/不确定</option><option value="all">全部标签</option></select></label>
+          <button id="clear-labels" class="button danger" type="button">执行清除</button>
+          <dl class="counts"><div><dt>目标像素</dt><dd id="count-target">0</dd></div><div><dt>背景像素</dt><dd id="count-background">0</dd></div><div><dt>忽略像素</dt><dd id="count-ignore">0</dd></div></dl>
+        </section>
+      </div>
+
+      <section class="card canvas-card">
+        <div class="heading"><div><span>05</span><h2>源像素标注画布</h2><p>滚轮缩放；平移工具或按住空格拖动；画笔坐标始终落在 ROI 原始像素上。</p></div><span id="viewport-status">尚未载入 ROI</span></div>
+        <div class="annotation-stage" id="annotation-stage"><canvas id="annotation-canvas" aria-label="源分辨率像素标注画布"></canvas><div id="canvas-placeholder">先在整图预览选择并载入 ROI</div></div>
+      </section>
+
+      <section class="card train-card">
+        <div class="heading"><div><span>06</span><h2>保存、训练与即时反馈</h2></div></div>
+        <div class="train-controls"><label>目标概率阈值<input id="pixel-threshold" type="number" min="0.05" max="0.95" step="0.01" value="0.50"></label><label>最小目标面积 (px)<input id="pixel-min-area" type="number" min="1" max="10000" step="1" value="5"></label><label>随机森林树数<select id="pixel-trees"><option>16</option><option selected>32</option><option>48</option><option>64</option></select></label><label>固定随机种子<input id="pixel-seed" type="number" step="1" value="1729"></label></div>
+        <div class="train-actions"><button id="save-labels" class="button secondary" type="button">保存当前 ROI 标签</button><button id="train-pixel-model" class="button primary" type="button">训练并生成预览</button></div>
+        <p id="training-status" class="status" role="status">尚未保存 ROI 标签。</p>
+        <p id="training-error" class="error" role="alert" hidden></p>
+        <div id="prediction-grid" class="prediction-grid" hidden>
+          <figure><img id="probability-preview" alt="目标概率图"><figcaption>目标概率图（0–1，伪彩色）</figcaption></figure>
+          <figure><img id="segmentation-preview" alt="阈值分割掩膜"><figcaption>阈值分割掩膜</figcaption></figure>
+          <figure><img id="overlay-preview" alt="人工标签、模型预测叠加图"><figcaption>人工标签与模型预测叠加</figcaption></figure>
+        </div>
+        <div id="metrics" class="metrics" hidden></div>
+      </section>
+    </section>
+
+    <section id="guide" class="guide card">
+      <h2>闭环怎么使用</h2>
+      <ol><li>用 calibration 晶圆创建项目，在整图预览选择具有代表性的 ROI。</li><li>红色标目标前景，绿色标背景/伪影；拿不准的区域用黄色 ignore，不参加训练。</li><li>保存 ROI 后训练，查看概率、掩膜和叠加图；在错误区域补充标签后重新训练。</li><li>另建 validation 或 locked_test 晶圆项目。程序按 wafer_id 阻止同片晶圆跨集合。</li><li>下载模型后可在新建分析中启用。像素分割只提出候选，最终仍受有效掩膜、边缘和形态规则约束。</li></ol>
+      <p>训练集表现不等于真实泛化准确率。没有独立真实 SiC 专家标签时，程序会保持“尚不能证明真实准确率提升”的状态。</p>
+    </section>
+  </main>
+
+  <footer>v{{ software_version }} · Git {{ git_revision }} · 仅本机运行</footer>
+  <script type="module" src="{{ url_for('static', filename='pixel_training.js') }}"></script>
+</body>
+</html>

@@ -33,6 +33,7 @@ export const api = {
     return requestJson(`/api/runs/${encodeURIComponent(runId)}/defects?${params}`);
   },
   getTraining: () => requestJson('/api/training'),
+  getPixelTraining: () => requestJson('/api/pixel-training/projects'),
   saveTrainingLabel: (payload) => requestJson('/api/training/labels', {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},

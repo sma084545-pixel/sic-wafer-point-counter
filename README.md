@@ -1,12 +1,12 @@
 # SiC 晶圆 X 射线形貌图点状目标计数器
 
-这是一个可运行、可调参、可复核的计算机视觉程序，用来统计 4 英寸（本项目按直径 **100 mm** 标定）SiC 晶圆图像中的黑色点状目标，并按实际有效分析面积计算点状目标密度。基础检测使用透明的传统图像规则；可选的专家训练窗口使用轻量候选级逻辑分类器，不使用深度学习。主要依赖 OpenCV、NumPy、SciPy、scikit-image 和 tifffile。
+这是一个可运行、可调参、可复核的计算机视觉程序，用来统计 4 英寸（本项目按直径 **100 mm** 标定）SiC 晶圆图像中的黑色点状目标，并按实际有效分析面积计算点状目标密度。基础检测使用透明的传统图像规则；交互训练页允许专家直接在原图 ROI 上画前景、背景和忽略标签，训练可移植的像素级随机森林并即时查看概率/分割预览。v0.3 候选级逻辑分类器仍作为可选第二阶段保留。本项目不使用深度学习。
 
 > **科学解释边界**：程序统计的是“满足当前图像判定和筛选标准的黑色点状目标”。黑点并不会自动成为物理意义上的位错。只有在人工标注或独立实验已确认这类图像特征与位错一一对应时，`n/S` 才可以作为位错密度报告。本工具不能替代材料专家的物理判定。
 
 ## 在线静态展示
 
-项目的公开展示页位于 <https://sma084545-pixel.github.io/sic-wafer-point-counter/>，其中[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)会在独立 Web Worker 内运行打包后的同一套 Python 管线。输入 `File` 只读挂载在当前标签页，不上传到网站服务器；页面按格式和内存风险分层放行，兼容布局的 TIFF/BigTIFF 可选择至 100 MiB 并按原始分辨率重叠分块分析。超过网页安全清单、编码不支持、需要完整候选裁剪或需长期留存结果时，应使用本机工作台。
+项目的公开展示页位于 <https://sma084545-pixel.github.io/sic-wafer-point-counter/>。[浏览器交互训练页](https://sma084545-pixel.github.io/sic-wafer-point-counter/train.html)支持原图 ROI 标注、训练、概率/掩膜预览、纠错重训以及项目/模型保存加载；[浏览器分析页](https://sma084545-pixel.github.io/sic-wafer-point-counter/analyze.html)可导入同一像素模型并在独立 Web Worker 内运行打包后的同一套 Python 管线。输入 `File` 只读挂载在当前标签页，不上传到网站服务器。
 
 ## 程序做什么
 
@@ -17,7 +17,7 @@
 3. 根据拟合圆、边缘排除宽度和无效区生成 `full_wafer_mask` 与 `valid_analysis_mask`；
 4. 通过大尺度背景校正和多尺度黑帽/DoG 增强暗色点；
 5. 阈值、形态学清理、连通域标记和可选的保守分水岭生成候选；
-6. 提取每个候选的位置、尺寸、形状、对比度和边缘距离，先保存透明规则判定；可选专家训练分类器再给出目标概率及目标/伪影/不确定判定；
+6. 可选像素模型先对源图或重叠 tile 输出目标图像类概率和分割候选；随后提取每个候选的位置、尺寸、形状、对比度和边缘距离并执行硬规则；可选 v0.3 候选分类器再做二次判别；
 7. 保存全部候选、规则判定、模型概率、最终判定、拒绝原因、局部裁剪和带编号叠加图；
 8. 按最终有效掩膜面积计算 `rho = n / S`、计数标准不确定度和 Poisson 95% 区间。
 
@@ -37,6 +37,7 @@ sic_wafer_point_counter/
 │   ├── final_academic_audit.md
 │   ├── measurement_protocol.md
 │   ├── real_annotation_protocol.md
+│   ├── pixel_training_guide.md
 │   ├── showcase_platform.md
 │   ├── index.html                 # GitHub Pages 静态科研展示页
 │   ├── assets/showcase.css
@@ -57,6 +58,8 @@ sic_wafer_point_counter/
 │   ├── validation.py
 │   ├── candidate_classifier.py # 可移植的候选级专家训练模型
 │   ├── training_repository.py  # 本机标注、共识、拆分与模型管理
+│   ├── pixel_classifier.py     # 多尺度特征、像素随机森林、预测与验证
+│   ├── pixel_training_repository.py # 原图、ROI 标签、项目与模型持久化
 │   ├── run_repository.py        # 安全的历史结果与候选分页读取
 │   ├── web.py                   # 本机 Flask 工作台与 API
 │   ├── utils.py
@@ -163,7 +166,7 @@ Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入�
 .venv/bin/python -m sic_wafer_counter.cli web --workspace .
 ```
 
-在浏览器打开终端显示的 `http://127.0.0.1:8765/`。页面提供总览、新建分析、历史结果、结果仪表板、候选浏览器、专家标注训练，以及方法/验证说明。上传和合成演示都直接调用与 CLI 相同的 `analyze_image` 管线；前端不复制检测算法，也不读取 ground truth 生成结果。
+在浏览器打开终端显示的 `http://127.0.0.1:8765/`。页面提供总览、新建分析、历史结果、结果仪表板、候选浏览器、原图像素交互训练、v0.3 候选二次训练，以及方法/验证说明。上传和合成演示都直接调用与 CLI 相同的 `analyze_image` 管线；前端不复制检测算法，也不读取 ground truth 生成结果。
 
 平台的关键行为：
 
@@ -171,8 +174,13 @@ Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入�
 - 服务重启后从 `results/` 的合法直接子目录恢复历史结果；损坏摘要被隔离而不影响其他记录；
 - `defects_all.csv` 在服务端流式筛选和分页，单页最多 200 条，不把 10 万候选一次送入浏览器；
 - 候选浏览器可由专家逐项标为“目标”“伪影”或“不确定”；标注保存在本机 `training/candidate_annotations.csv`，同一候选的多标注者冲突不会进入训练；
+- “图像交互训练”直接从原图有界读取 32–2048 px ROI；画笔标签无损保存到 `training/pixel_projects/*/project.json`，缩放和平移只改变显示，不改变标签在原始像素中的坐标；
+- 像素模型使用强度、Gaussian、DoG、局部均值/方差、Sobel、LoG、Hessian、结构一致性和暗响应等不含绝对坐标的多尺度特征；训练按类别平衡、使用固定随机种子，并保存树结构、特征配置、来源图像 SHA-256、split、标签数量、参数、验证状态和模型 SHA-256；
+- 训练后立即显示目标图像类概率、阈值分割和“人工标签 + 模型预测”叠加图。可在误检/漏检处继续画标签并重训；ignore 像素不作为背景参加训练；
+- 像素分割只提出连通候选，不能绕过 `valid_analysis_mask`、边缘排除和形态硬规则。v0.3 候选分类器可继续作为第二阶段；CSV 分开记录像素概率、规则判定、候选分类器判定和最终判定；
 - 候选分类器至少需要 5 个目标和 5 个伪影校准标签，`validation` 与 `locked_test` 标签不参与拟合；程序禁止同一 `wafer_id` 跨校准与留出集合；
 - 训练模型保存为带 SHA-256 的 `training/candidate_classifier.json`。本机新分析可直接启用；GitHub Pages 浏览器分析页可导入同一个 JSON，并由打包的同一 Python 管线核验和应用；
+- 像素模型保存为 `training/pixel_classifier.json`，训练项目可重新打开继续编辑；本机与 GitHub Pages 使用同一 `portable_random_forest_pixel_classifier` JSON 规范和同一 Python 推理代码；
 - 模型只覆盖候选级图像分类，不覆盖最终有效掩膜和边界硬约束，也不自动证明 TSD、TED 或 BPD 的物理身份；没有独立留出晶圆时会明确报告真实准确率未知；
 - 叠加图、掩膜、空间密度图和报告只在本次运行目录内按白名单提供，缺失文件显示“本次运行未生成”；
 - 结果页把每一张分析图、每一份表格和报告都作为独立原文件下载；另提供“全部分析图”“全部报告与表格”“全部局部分析包”和“Cu-0008-R 格式顺序三联件”四个 ZIP；
@@ -208,6 +216,19 @@ Pyodide 和科学计算依赖从固定版本的 jsDelivr 资源下载；输入�
 - 浏览器只显示已有 PNG 预览，不会为缺失缩略图临时读取原始 TIFF；完整定量值以 CSV/JSON/HTML 报告为准。
 
 平台架构、API、安全模型和展示验收记录见 [展示平台说明](docs/showcase_platform.md)。
+
+## 原图像素交互训练
+
+本机工作台进入“图像交互训练”；静态网页版进入 <https://sma084545-pixel.github.io/sic-wafer-point-counter/train.html>。基本闭环是：
+
+1. 为每片原图填写稳定的 `wafer_id`，选择 `calibration`、`validation` 或 `locked_test`；
+2. 在整图预览拖选代表性 ROI，再在源分辨率画布上用红色标目标、绿色标背景/伪影、黄色标 ignore；
+3. 保存标签并训练，查看目标图像类概率、分割掩膜和人工/预测叠加；
+4. 在漏检和误检处补充少量标签，重新训练并比较；
+5. 下载 `pixel_classifier.json`，在“新建分析”中启用，或在 GitHub Pages 分析页导入；
+6. 为独立晶圆建立 validation / locked test 项目。程序禁止同一 `wafer_id` 跨数据用途，但研究人员仍须确保不同裁片没有来自同一晶圆的隐性泄漏。
+
+算法是类平衡的随机化决策森林，不把图像绝对坐标作为特征。模型阈值只是图像分割阈值；预测结果必须继续通过有效区域、边界、尺寸和形态规则。训练集 ROI 上的 precision/recall/F1/IoU 只用于即时纠错，不能作为真实泛化性能。只有独立 validation/locked test 晶圆上的像素级与目标级指标才可用于评估图像识别；缺少独立物理证据时仍不能把“目标图像类”自动命名为 TSD/TED/BPD。详细操作见[像素交互训练指南](docs/pixel_training_guide.md)。
 
 典型真实 TIFF 命令：
 
@@ -395,6 +416,8 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 | `valid_analysis_mask.png` | 面积计算真正使用的最终有效区 |
 | `preprocessed_preview.png` | 背景校正/暗响应预览 |
 | `candidate_mask.png` | 筛选前候选二值图 |
+| `pixel_classifier.json` | 本次应用的像素模型，含特征、来源、参数、验证状态和 SHA-256；仅在启用时生成 |
+| `pixel_target_probability.png` | 像素模型目标图像类概率预览；不是 TSD/TED/BPD 物理类别概率 |
 | `analysis_config.yaml` | 合并 CLI 覆盖值后的本次实际参数 |
 | `resolved_physical_parameters.yaml` | 物理单位输入、`um_per_pixel`、转换后的像素参数及物理/旧像素参数来源 |
 | `run.log` | 加载方式、警告、失败原因、时间和大图限制 |

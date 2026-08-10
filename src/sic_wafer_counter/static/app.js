@@ -35,6 +35,8 @@ const elements = {
   trainingModelDownload: document.querySelector('#training-model-download'),
   useTrainedClassifier: document.querySelector('#use-trained-classifier'),
   analysisClassifierStatus: document.querySelector('#analysis-classifier-status'),
+  usePixelClassifier: document.querySelector('#use-pixel-classifier'),
+  analysisPixelClassifierStatus: document.querySelector('#analysis-pixel-classifier-status'),
 };
 
 function announce(message) {
@@ -126,8 +128,13 @@ function renderTrainingStatus(payload) {
 
 async function refreshTraining({announceResult = false} = {}) {
   try {
-    const payload = await api.getTraining();
+    const [payload, pixelPayload] = await Promise.all([api.getTraining(), api.getPixelTraining()]);
     renderTrainingStatus(payload);
+    elements.usePixelClassifier.disabled = !pixelPayload.model_available;
+    if (!pixelPayload.model_available) elements.usePixelClassifier.checked = false;
+    elements.analysisPixelClassifierStatus.textContent = pixelPayload.model_available
+      ? `像素模型可用；共 ${Number(pixelPayload.projects?.length || 0)} 个本机训练项目`
+      : '尚无像素模型；请打开“图像交互训练”完成原图标注与训练';
     if (announceResult) announce(`已读取 ${payload.annotation_count || 0} 条本机专家标注`);
   } catch (error) {
     elements.trainingStatus.className = 'empty-state';
@@ -136,6 +143,9 @@ async function refreshTraining({announceResult = false} = {}) {
     elements.useTrainedClassifier.disabled = true;
     elements.useTrainedClassifier.checked = false;
     elements.analysisClassifierStatus.textContent = '训练状态不可用';
+    elements.usePixelClassifier.disabled = true;
+    elements.usePixelClassifier.checked = false;
+    elements.analysisPixelClassifierStatus.textContent = '像素训练状态不可用';
     if (announceResult) showAlert(error.message);
   }
 }

@@ -32,7 +32,13 @@ from .point_detection import (
     DetectionConfig,
     deduplicate_candidates,
     detect_candidates,
+    detection_from_probability,
     estimate_response_threshold,
+)
+from .pixel_classifier import (
+    PixelClassifierError,
+    pixel_model_from_config,
+    predict_pixel_probability,
 )
 from .preprocessing import PreprocessingResult, preprocess_image
 from .physical_parameters import resolve_physical_parameters
@@ -84,6 +90,8 @@ class _DetectionBundle:
     threshold_value: float | None
     candidate_mask: np.ndarray
     preprocessed_preview: np.ndarray
+    pixel_probability_preview: np.ndarray | None
+    pixel_classifier_report: dict[str, Any]
     warnings: list[str]
 
 
@@ -453,19 +461,92 @@ def _candidate_preview_mask(
     return mask.astype(bool)
 
 
+def _pixel_detection_parameters(
+    config: Mapping[str, Any], model: Mapping[str, Any]
+) -> tuple[float, int]:
+    section = config.get("pixel_classifier", {})
+    values = section if isinstance(section, Mapping) else {}
+    threshold = values.get("probability_threshold")
+    minimum = values.get("minimum_object_area_px")
+    return (
+        float(model["probability_threshold"] if threshold is None else threshold),
+        int(model["minimum_object_area_px"] if minimum is None else minimum),
+    )
+
+
+def _attach_pixel_candidate_audit(
+    records: list[dict[str, Any]],
+    labels: np.ndarray,
+    probability: np.ndarray,
+    *,
+    model: Mapping[str, Any],
+    threshold: float,
+) -> None:
+    """Attach mean/max source-pixel probabilities to each labelled candidate."""
+
+    for record in records:
+        label_id = int(record.get("defect_id", 0))
+        values = probability[labels == label_id]
+        mean_probability = float(np.mean(values)) if values.size else None
+        max_probability = float(np.max(values)) if values.size else None
+        record.update(
+            {
+                "pixel_model_applied": True,
+                "pixel_model_probability_mean": mean_probability,
+                "pixel_model_probability_max": max_probability,
+                "pixel_model_threshold": float(threshold),
+                "pixel_model_sha256": str(model["model_sha256"]),
+                "pixel_segmentation_decision": "foreground_component",
+            }
+        )
+
+
 def _detect_small(
     image: np.ndarray,
     masks: AnalysisMasks,
     geometry: WaferGeometry,
     config: Mapping[str, Any],
+    *,
+    pixel_model: Mapping[str, Any] | None = None,
 ) -> _DetectionBundle:
     preprocessing = preprocess_image(image, masks.valid_analysis_mask, config)
-    detection = detect_candidates(
-        preprocessing.filtered,
-        masks.valid_analysis_mask,
-        config,
-        dark_response=preprocessing.dark_response,
-    )
+    probability: np.ndarray | None = None
+    if pixel_model is None:
+        detection = detect_candidates(
+            preprocessing.filtered,
+            masks.valid_analysis_mask,
+            config,
+            dark_response=preprocessing.dark_response,
+        )
+        pixel_report: dict[str, Any] = {
+            "status": "disabled",
+            "model_sha256": None,
+            "physical_identity_validated": False,
+        }
+    else:
+        threshold, minimum_area = _pixel_detection_parameters(config, pixel_model)
+        probability = predict_pixel_probability(image, pixel_model)
+        detection = detection_from_probability(
+            probability,
+            masks.valid_analysis_mask,
+            config,
+            probability_threshold=threshold,
+            minimum_object_area_px=minimum_area,
+        )
+        pixel_report = {
+            "status": "applied",
+            "model_type": pixel_model["model_type"],
+            "model_schema_version": pixel_model["schema_version"],
+            "model_sha256": pixel_model["model_sha256"],
+            "probability_threshold": threshold,
+            "minimum_object_area_px": minimum_area,
+            "feature_names": list(pixel_model["feature_names"]),
+            "training_parameters": copy.deepcopy(pixel_model.get("training_parameters", {})),
+            "training_sources": copy.deepcopy(pixel_model.get("training_sources", [])),
+            "label_counts": copy.deepcopy(pixel_model.get("label_counts", {})),
+            "validation": copy.deepcopy(pixel_model.get("validation", {})),
+            "physical_identity_validated": False,
+        }
     valid_boundary_distance = valid_boundary_distance_transform(
         masks.valid_analysis_mask
     )
@@ -481,6 +562,14 @@ def _detect_small(
         valid_boundary_distance_px=valid_boundary_distance,
     )
     records = features_to_records(features)
+    if probability is not None:
+        _attach_pixel_candidate_audit(
+            records,
+            detection.labels,
+            probability,
+            model=pixel_model,
+            threshold=float(detection.threshold_value),
+        )
     frame = pd.DataFrame.from_records(records, columns=DEFECT_COLUMNS)
     return _DetectionBundle(
         frame=frame,
@@ -492,6 +581,8 @@ def _detect_small(
         threshold_value=detection.threshold_value,
         candidate_mask=detection.candidate_mask,
         preprocessed_preview=preprocessing.dark_response,
+        pixel_probability_preview=probability,
+        pixel_classifier_report=pixel_report,
         warnings=list(detection.warnings),
     )
 
@@ -505,6 +596,7 @@ def _detect_large(
     invalid_regions: Sequence[Any],
     invalid_mask: np.ndarray | None,
     preview_masks: AnalysisMasks,
+    pixel_model: Mapping[str, Any] | None = None,
 ) -> _DetectionBundle:
     io_config = config.get("io", {})
     tile_size = int(io_config.get("tile_size", 2048))
@@ -517,7 +609,7 @@ def _detect_large(
 
     detection_config = DetectionConfig.from_mapping(config).validated()
     global_threshold: float | None = None
-    if (
+    if pixel_model is None and (
         detection_config.method in {"blackhat", "combine"}
         and detection_config.threshold_method != "adaptive"
     ):
@@ -567,7 +659,7 @@ def _detect_large(
             LOGGER.info("Global tiled response threshold: %s", global_threshold)
         else:
             warnings.append("No valid dark-response samples were available for global thresholding")
-    elif detection_config.threshold_method == "adaptive":
+    elif pixel_model is None and detection_config.threshold_method == "adaptive":
         warnings.append(
             "Adaptive thresholding is necessarily tile-local; inspect overlap consistency"
         )
@@ -584,6 +676,30 @@ def _detect_large(
         use_contour=True,
     )
 
+    probability_preview = (
+        np.zeros(image_data.preview.shape, dtype=np.float32)
+        if pixel_model is not None
+        else None
+    )
+    pixel_threshold: float | None = None
+    pixel_minimum_area: int | None = None
+    if pixel_model is not None:
+        pixel_threshold, pixel_minimum_area = _pixel_detection_parameters(config, pixel_model)
+        required_halo = int(
+            math.ceil(
+                max(
+                    max(pixel_model["feature_config"]["gaussian_sigmas_px"]) * 4.0,
+                    max(pixel_model["feature_config"]["local_radii_px"]),
+                    pixel_model["feature_config"]["hessian_sigma_px"] * 4.0,
+                    pixel_model["feature_config"]["structure_sigma_px"] * 4.0 + 1.0,
+                )
+            )
+        )
+        if overlap < required_halo:
+            raise PixelClassifierError(
+                f"tile_overlap={overlap}px 小于像素模型所需 {required_halo}px 特征邻域"
+            )
+
     for tile in image_data.iter_tiles(tile_size=tile_size, overlap=overlap):
         masks = _tile_masks(
             geometry,
@@ -596,13 +712,42 @@ def _detect_large(
             continue
         tile_count += 1
         preprocessing = preprocess_image(tile.image, masks.valid_analysis_mask, config)
-        detection = detect_candidates(
-            preprocessing.filtered,
-            masks.valid_analysis_mask,
-            config,
-            dark_response=preprocessing.dark_response,
-            threshold_value=global_threshold,
-        )
+        probability: np.ndarray | None = None
+        if pixel_model is None:
+            detection = detect_candidates(
+                preprocessing.filtered,
+                masks.valid_analysis_mask,
+                config,
+                dark_response=preprocessing.dark_response,
+                threshold_value=global_threshold,
+            )
+        else:
+            probability = predict_pixel_probability(tile.image, pixel_model)
+            detection = detection_from_probability(
+                probability,
+                masks.valid_analysis_mask,
+                config,
+                probability_threshold=float(pixel_threshold),
+                minimum_object_area_px=int(pixel_minimum_area),
+            )
+            core_y, core_x = tile.core_slice
+            preview_x0 = int(round(tile.core_x / image_data.metadata.preview_scale_x))
+            preview_y0 = int(round(tile.core_y / image_data.metadata.preview_scale_y))
+            preview_x1 = int(
+                round((tile.core_x + tile.core_width) / image_data.metadata.preview_scale_x)
+            )
+            preview_y1 = int(
+                round((tile.core_y + tile.core_height) / image_data.metadata.preview_scale_y)
+            )
+            preview_x0 = max(0, min(image_data.preview.shape[1] - 1, preview_x0))
+            preview_x1 = max(preview_x0 + 1, min(image_data.preview.shape[1], preview_x1))
+            preview_y0 = max(0, min(image_data.preview.shape[0] - 1, preview_y0))
+            preview_y1 = max(preview_y0 + 1, min(image_data.preview.shape[0], preview_y1))
+            probability_preview[preview_y0:preview_y1, preview_x0:preview_x1] = cv2.resize(
+                probability[core_y, core_x],
+                (preview_x1 - preview_x0, preview_y1 - preview_y0),
+                interpolation=cv2.INTER_AREA,
+            )
         warnings.extend(detection.warnings)
         boundary_distance = _exact_tile_valid_boundary_distance(
             geometry,
@@ -639,7 +784,16 @@ def _detect_large(
             wafer_diameter_mm=geometry.diameter_mm,
             valid_boundary_distance_px=boundary_distance,
         )
-        for record in features_to_records(features):
+        tile_records = features_to_records(features)
+        if probability is not None:
+            _attach_pixel_candidate_audit(
+                tile_records,
+                detection.labels,
+                probability,
+                model=pixel_model,
+                threshold=float(pixel_threshold),
+            )
+        for record in tile_records:
             global_record = _globalize_record(record, tile)
             if not _inside_core(global_record, tile):
                 continue
@@ -670,9 +824,34 @@ def _detect_large(
         post_watershed_owned_count=owned_after,
         duplicate_count=duplicate_count,
         tile_count=tile_count,
-        threshold_value=global_threshold,
+        threshold_value=(global_threshold if pixel_model is None else pixel_threshold),
         candidate_mask=candidate_mask,
         preprocessed_preview=preview_preprocessing.dark_response,
+        pixel_probability_preview=probability_preview,
+        pixel_classifier_report=(
+            {
+                "status": "disabled",
+                "model_sha256": None,
+                "physical_identity_validated": False,
+            }
+            if pixel_model is None
+            else {
+                "status": "applied",
+                "model_type": pixel_model["model_type"],
+                "model_schema_version": pixel_model["schema_version"],
+                "model_sha256": pixel_model["model_sha256"],
+                "probability_threshold": pixel_threshold,
+                "minimum_object_area_px": pixel_minimum_area,
+                "feature_names": list(pixel_model["feature_names"]),
+                "training_parameters": copy.deepcopy(pixel_model.get("training_parameters", {})),
+                "training_sources": copy.deepcopy(pixel_model.get("training_sources", [])),
+                "label_counts": copy.deepcopy(pixel_model.get("label_counts", {})),
+                "validation": copy.deepcopy(pixel_model.get("validation", {})),
+                "physical_identity_validated": False,
+                "tiled_inference": True,
+                "tile_overlap_px": overlap,
+            }
+        ),
         warnings=warnings,
     )
 
@@ -745,6 +924,7 @@ def analyze_image(
             config, mm_per_pixel=geometry.mm_per_pixel
         )
         analysis_config = physical_resolution.config
+        pixel_model = pixel_model_from_config(analysis_config)
         resolved_parameters_path = atomic_write_yaml(
             folder / "resolved_physical_parameters.yaml", physical_resolution.report
         )
@@ -786,6 +966,7 @@ def analyze_image(
                 invalid_regions=invalid_regions,
                 invalid_mask=invalid_mask,
                 preview_masks=preview_masks,
+                pixel_model=pixel_model,
             )
             output_image = image_data.preview
             output_masks = preview_masks
@@ -799,14 +980,28 @@ def analyze_image(
             )
             area = calculate_area_statistics(geometry, masks=full_masks)
             detected = _detect_small(
-                image_data.require_full(), full_masks, geometry, analysis_config
+                image_data.require_full(),
+                full_masks,
+                geometry,
+                analysis_config,
+                pixel_model=pixel_model,
             )
             output_image = image_data.require_full()
             output_masks = full_masks
 
         classifier_model = model_from_config(analysis_config)
         classifier_warnings: list[str] = []
+        detected.frame["rule_accepted"] = detected.frame["accepted"].astype(bool)
+        detected.frame["rule_rejection_reason"] = detected.frame["rejection_reason"].fillna("").astype(str)
         if classifier_model is None:
+            detected.frame["classifier_applied"] = False
+            detected.frame["classifier_probability"] = np.nan
+            detected.frame["classifier_decision"] = "not_applied"
+            detected.frame["decision_basis"] = (
+                "pixel_segmentation_then_configured_image_rules"
+                if pixel_model is not None
+                else "configured_image_rules"
+            )
             classifier_report: dict[str, Any] = {
                 "status": "disabled",
                 "physical_identity_validated": False,
@@ -870,11 +1065,44 @@ def analyze_image(
             "accepted_count": accepted_count,
             "rejected_count": int(len(detected.frame) - accepted_count),
             "decision_basis": (
-                "trained_candidate_classifier"
+                "pixel_segmentation_then_trained_candidate_classifier_and_hard_rules"
+                if pixel_model is not None and classifier_model is not None
+                else "pixel_segmentation_then_configured_image_rules"
+                if pixel_model is not None
+                else "trained_candidate_classifier"
                 if classifier_model is not None
                 else "configured_image_rules"
             ),
+            "pixel_classifier": detected.pixel_classifier_report,
             "candidate_classifier": classifier_report,
+            "method_comparison": {
+                "traditional_candidate_detector": {
+                    "status": "not_run_counterfactually"
+                    if pixel_model is not None
+                    else "used",
+                    "candidate_count": None if pixel_model is not None else detected.post_watershed_count,
+                },
+                "pixel_segmentation": {
+                    "status": detected.pixel_classifier_report.get("status", "disabled"),
+                    "model_sha256": detected.pixel_classifier_report.get("model_sha256"),
+                    "threshold": detected.pixel_classifier_report.get("probability_threshold"),
+                    "component_count": detected.post_watershed_count if pixel_model is not None else None,
+                },
+                "configured_rule_filter": {
+                    "accepted_count": int(detected.frame["rule_accepted"].sum()),
+                    "rejected_count": int((~detected.frame["rule_accepted"]).sum()),
+                },
+                "candidate_classifier": {
+                    "status": classifier_report.get("status", "disabled"),
+                    "model_sha256": classifier_report.get("model_sha256"),
+                    "target_count": classifier_report.get("target_count"),
+                    "uncertain_count": classifier_report.get("uncertain_count"),
+                },
+                "final_accepted_count": accepted_count,
+                "accuracy_comparison_status": (
+                    "counts_are_auditable; comparative_accuracy_requires common held-out expert labels"
+                ),
+            },
             "point_density_cm2": density.density_cm2,
             "density_unit": "cm^-2",
             "counting_uncertainty_cm2": density.standard_uncertainty_cm2,
@@ -895,8 +1123,11 @@ def analyze_image(
             "uncertainty_budget_summary": {
                 "counting": "Poisson/Garwood interval reported",
                 "classification": (
-                    str(classifier_report.get("validation_status"))
-                    if classifier_model is not None
+                    "pixel="
+                    + str(detected.pixel_classifier_report.get("validation", {}).get("status", "not quantified"))
+                    + "; candidate="
+                    + str(classifier_report.get("validation_status", "not quantified"))
+                    if pixel_model is not None or classifier_model is not None
                     else "not quantified: no real SiC expert-label validation"
                 ),
                 "parameter_sensitivity": "not quantified: no calibration-wafer sensitivity run",
@@ -944,6 +1175,32 @@ def analyze_image(
                 classifier_model,
                 sort_keys=True,
             )
+        if pixel_model is not None:
+            output_files["pixel_classifier"] = atomic_write_json(
+                folder / "pixel_classifier.json",
+                pixel_model,
+                sort_keys=True,
+            )
+            probability_preview = np.asarray(
+                detected.pixel_probability_preview, dtype=np.float32
+            )
+            max_side = int(analysis_config.get("io", {}).get("max_overlay_size", 6000))
+            if max(probability_preview.shape) > max_side:
+                scale = max_side / max(probability_preview.shape)
+                probability_preview = cv2.resize(
+                    probability_preview,
+                    (
+                        max(1, int(round(probability_preview.shape[1] * scale))),
+                        max(1, int(round(probability_preview.shape[0] * scale))),
+                    ),
+                    interpolation=cv2.INTER_AREA,
+                )
+            probability_u8 = np.rint(np.clip(probability_preview, 0.0, 1.0) * 255.0).astype(np.uint8)
+            probability_colour = cv2.applyColorMap(probability_u8, cv2.COLORMAP_VIRIDIS)
+            probability_path = folder / "pixel_target_probability.png"
+            if not cv2.imwrite(str(probability_path), probability_colour):
+                raise OSError(f"Could not save {probability_path}")
+            output_files["pixel_target_probability"] = probability_path
         output_files["resolved_physical_parameters"] = resolved_parameters_path
         # Include report/PNG/CSV generation in the stated wall-clock runtime,
         # then refresh the two summary files and HTML headline deterministically.

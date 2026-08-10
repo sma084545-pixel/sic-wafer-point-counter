@@ -4,13 +4,92 @@ from __future__ import annotations
 
 import hashlib
 import io
+import json
 from pathlib import Path
 import shutil
 import time
 import zipfile
 
+import cv2
+import numpy as np
+
+from sic_wafer_counter.pixel_classifier import encode_label_mask_rle
+
 from sic_wafer_counter.web import create_app
 from sic_wafer_counter import __version__
+
+
+def test_pixel_training_web_api_closes_source_label_model_preview_loop(tmp_path: Path) -> None:
+    image = np.full((96, 112), 190, np.uint8)
+    labels = np.zeros(image.shape, np.uint8)
+    cv2.circle(image, (34, 38), 5, 45, -1)
+    cv2.circle(image, (76, 61), 5, 52, -1)
+    labels[32:45, 28:41] = 1
+    labels[55:68, 70:83] = 1
+    labels[4:18, 4:108] = 2
+    labels[78:92, 4:108] = 2
+    ok, encoded = cv2.imencode(".png", image)
+    assert ok
+    app = create_app(tmp_path / "workspace", max_workers=1, max_upload_mb=4)
+    app.config["TESTING"] = True
+    manager = app.extensions["sic_wafer_job_manager"]
+    try:
+        with app.test_client() as client:
+            page = client.get("/pixel-training")
+            assert page.status_code == 200
+            text = page.get_data(as_text=True)
+            assert "源像素标注画布" in text and "目标概率图" in text
+            created = client.post(
+                "/api/pixel-training/projects",
+                data={
+                    "image": (io.BytesIO(encoded.tobytes()), "training.png"),
+                    "wafer_id": "wafer-api-1",
+                    "reviewer_id": "reviewer-A",
+                    "split": "calibration",
+                },
+                content_type="multipart/form-data",
+            )
+            assert created.status_code == 201, created.get_json()
+            project = created.get_json()["project"]
+            project_id = project["project_id"]
+            assert project["reviewer_id"] == "reviewer-A"
+            assert client.get(project["preview_url"]).mimetype == "image/png"
+            roi = client.get(
+                f"/api/pixel-training/projects/{project_id}/roi?x=0&y=0&width=112&height=96"
+            )
+            assert roi.status_code == 200 and roi.mimetype == "image/png"
+            saved = client.post(
+                f"/api/pixel-training/projects/{project_id}/annotations",
+                json={"roi_xywh": [0, 0, 112, 96], "labels": encode_label_mask_rle(labels)},
+            )
+            assert saved.status_code == 200, saved.get_json()
+            annotation_id = saved.get_json()["annotation"]["annotation_id"]
+            trained = client.post(
+                "/api/pixel-training/train",
+                json={"n_trees": 4, "random_seed": 22, "probability_threshold": 0.5},
+            )
+            assert trained.status_code == 200, trained.get_json()
+            model = trained.get_json()["model"]
+            assert len(model["model_sha256"]) == 64
+            assert model["training_sources"][0]["wafer_id"] == "wafer-api-1"
+            preview = client.post(
+                f"/api/pixel-training/projects/{project_id}/predict/{annotation_id}",
+                json={"probability_threshold": 0.5, "minimum_object_area_px": 5},
+            )
+            assert preview.status_code == 200, preview.get_json()
+            report = preview.get_json()["prediction"]
+            assert set(report["files"]) == {"probability", "segmentation", "overlay"}
+            for url in report["files"].values():
+                response = client.get(url)
+                assert response.status_code == 200 and response.mimetype == "image/png"
+            downloaded = client.get(f"/api/pixel-training/projects/{project_id}/download")
+            payload = json.loads(downloaded.get_data(as_text=True))
+            assert payload["model"]["model_sha256"] == model["model_sha256"]
+            imported = client.post("/api/pixel-training/model", json=model)
+            assert imported.status_code == 200
+            assert imported.get_json()["model"]["model_sha256"] == model["model_sha256"]
+    finally:
+        manager.shutdown()
 
 
 def _wait_for_job(client, job_id: str) -> dict:

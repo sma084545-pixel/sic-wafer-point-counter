@@ -8,6 +8,7 @@ const ARTIFACT_LABELS = {
   'summary.json': '摘要 JSON',
   'summary.csv': '摘要 CSV',
   'candidate_classifier.json': '本次使用的候选分类器 JSON',
+  'pixel_classifier.json': '本次使用的像素级分类器 JSON',
   'defects_all.csv': '全部候选 CSV',
   'defects_accepted.csv': '接受目标 CSV',
   'defects_rejected.csv': '拒绝目标 CSV',
@@ -39,6 +40,7 @@ const IMAGE_LABELS = {
   'valid_analysis_mask.png': '最终有效分析掩膜',
   'wafer_mask.png': '完整晶圆掩膜',
   'preprocessed_preview.png': '暗目标响应预览',
+  'pixel_target_probability.png': '像素模型目标概率图',
   'candidate_mask.png': '候选二值掩膜',
 };
 

@@ -50,6 +50,12 @@ DEFECT_COLUMNS: tuple[str, ...] = (
     "distance_to_wafer_edge_mm",
     "accepted",
     "rejection_reason",
+    "pixel_model_applied",
+    "pixel_model_probability_mean",
+    "pixel_model_probability_max",
+    "pixel_model_threshold",
+    "pixel_model_sha256",
+    "pixel_segmentation_decision",
 )
 
 
@@ -203,7 +209,7 @@ class DefectFeature:
 
         data = asdict(self)
         data["bounding_box"] = json.dumps(self.bounding_box, separators=(",", ":"))
-        return {column: data[column] for column in DEFECT_COLUMNS}
+        return {column: data.get(column) for column in DEFECT_COLUMNS}
 
 
 def pixel_to_wafer_coordinates(

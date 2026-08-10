@@ -37,7 +37,8 @@
         <a href="#overview" data-nav="overview"><span aria-hidden="true">⌂</span>总览</a>
         <a href="#analyze" data-nav="analyze"><span aria-hidden="true">＋</span>新建分析</a>
         <a href="#runs" data-nav="runs"><span aria-hidden="true">▤</span>结果记录</a>
-        <a href="#training" data-nav="training"><span aria-hidden="true">◎</span>标注训练</a>
+        <a href="/pixel-training"><span aria-hidden="true">✎</span>图像交互训练</a>
+        <a href="#training" data-nav="training"><span aria-hidden="true">◎</span>候选二次训练</a>
         <p class="nav-label">研究说明</p>
         <a href="#methods" data-nav="methods"><span aria-hidden="true">△</span>方法与验证</a>
       </nav>
@@ -145,6 +146,10 @@
                   <input id="use-trained-classifier" name="use_trained_classifier" type="checkbox" value="true" disabled>
                   <span><strong>使用已训练候选分类器</strong><small id="analysis-classifier-status">尚未读取本机训练状态</small></span>
                 </label>
+                <label class="check-row" for="use-pixel-classifier">
+                  <input id="use-pixel-classifier" name="use_pixel_classifier" type="checkbox" value="true" disabled>
+                  <span><strong>使用像素级交互训练模型</strong><small id="analysis-pixel-classifier-status">尚未读取像素模型状态</small></span>
+                </label>
               </fieldset>
 
               <details class="manual-geometry">
@@ -200,15 +205,15 @@
 
       <section class="view" id="view-training" data-view="training" hidden>
         <header class="page-heading">
-          <div><h1>专家标注与候选训练</h1><p>在候选局部裁剪上标注目标、伪影或不确定，再训练可移植的图像候选分类器</p></div>
-          <a class="button secondary" href="#runs">选择结果并标注</a>
+          <div><h1>专家标注与候选训练（v0.3 兼容）</h1><p>在已经分割出的候选上做二次判别；这不是像素级 Trainable Weka 式训练</p></div>
+          <a class="button primary" href="/pixel-training">打开图像交互训练</a>
         </header>
 
         <section class="boundary-banner" aria-labelledby="training-boundary-title">
           <span class="boundary-icon" aria-hidden="true">i</span>
           <div>
             <h2 id="training-boundary-title">训练边界</h2>
-            <p>该分类器学习的是候选图像特征，不会把目标自动证明为 TSD、TED 或 BPD。有效掩膜和边界排除属于硬约束，训练模型不能覆盖。</p>
+            <p>本页保留 v0.3 候选分类器以兼容旧模型。需要直接在原图画目标/背景、查看概率图并反复纠错时，请使用独立的“图像交互训练”页面。两类模型都不会自动证明 TSD、TED 或 BPD。</p>
           </div>
         </section>
 
@@ -241,7 +246,7 @@
         </div>
 
         <section class="panel" aria-labelledby="training-workflow-title">
-          <div class="panel-heading"><div><h2 id="training-workflow-title">建议工作流</h2><p>对应论文人工计数校准与 ImageJ Trainable Weka 的“标注—训练—应用”思路</p></div></div>
+          <div class="panel-heading"><div><h2 id="training-workflow-title">候选模型兼容工作流</h2><p>作为像素分割后的可选第二阶段，而不是完整 Weka 替代</p></div></div>
           <ol class="numbered-steps">
             <li>先运行一张代表性晶圆图像，在结果页候选浏览器逐个查看原始局部裁剪。</li>
             <li>给清楚样本标“目标”或“伪影”，拿不准时必须标“不确定”，不要强行二分。</li>
@@ -382,7 +387,7 @@
     <a href="#overview" data-nav="overview"><span aria-hidden="true">⌂</span>总览</a>
     <a href="#analyze" data-nav="analyze"><span aria-hidden="true">＋</span>新分析</a>
     <a href="#runs" data-nav="runs"><span aria-hidden="true">▤</span>结果</a>
-    <a href="#training" data-nav="training"><span aria-hidden="true">◎</span>训练</a>
+    <a href="/pixel-training"><span aria-hidden="true">✎</span>图像训练</a>
     <a href="#methods" data-nav="methods"><span aria-hidden="true">△</span>方法</a>
   </nav>
 

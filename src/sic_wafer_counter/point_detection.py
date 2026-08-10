@@ -583,6 +583,72 @@ def detect_candidates(
     )
 
 
+def detection_from_probability(
+    probability: NDArray[np.generic],
+    valid_mask: NDArray[np.bool_],
+    config: DetectionConfig | Mapping[str, Any] | None = None,
+    *,
+    probability_threshold: float,
+    minimum_object_area_px: int | None = None,
+) -> DetectionResult:
+    """Convert a pixel-model probability map into auditable candidates.
+
+    This deliberately reuses the detector's morphology cleanup and conservative
+    watershed.  The probability model therefore proposes foreground pixels but
+    cannot bypass the final valid mask, edge distance or feature filters.
+    """
+
+    cfg = (
+        config.validated()
+        if isinstance(config, DetectionConfig)
+        else DetectionConfig.from_mapping(config).validated()
+    )
+    values = np.asarray(probability, dtype=np.float32)
+    mask = np.asarray(valid_mask, dtype=bool)
+    if values.ndim != 2 or values.shape != mask.shape or not np.isfinite(values).all():
+        raise ValueError("probability and valid_mask must be finite, equally sized 2-D arrays")
+    threshold = float(probability_threshold)
+    if not 0.0 < threshold < 1.0:
+        raise ValueError("probability_threshold must lie strictly between 0 and 1")
+    if not mask.any():
+        raise ValueError("valid_mask contains no valid pixels")
+    if minimum_object_area_px is not None:
+        minimum = int(minimum_object_area_px)
+        if minimum < 1:
+            raise ValueError("minimum_object_area_px must be >= 1")
+        cfg = replace(cfg, min_area_px=minimum).validated()
+    response = values.copy()
+    response[~mask] = 0.0
+    candidates = _clean_mask((response >= threshold) & mask, cfg)
+    pre_labels = np.asarray(label(candidates, connectivity=cfg.connectivity), dtype=np.int32)
+    pre_count = int(pre_labels.max(initial=0))
+    if cfg.use_watershed and pre_count:
+        final_labels = _conservative_watershed(pre_labels, cfg)
+    else:
+        final_labels = pre_labels.copy()
+    final_labels[~mask] = 0
+    post_count = int(final_labels.max(initial=0))
+    warnings: list[str] = []
+    if pre_count and post_count > max(pre_count * 4, pre_count + 100):
+        warnings.append(
+            f"Pixel-model watershed increased candidates from {pre_count} to {post_count}; "
+            "inspect possible over-segmentation"
+        )
+    return DetectionResult(
+        response=response,
+        candidate_mask_before_watershed=candidates,
+        candidate_mask=final_labels > 0,
+        labels=final_labels,
+        pre_watershed_count=pre_count,
+        post_watershed_count=post_count,
+        threshold_value=threshold,
+        blackhat_mask=None,
+        dog_mask=None,
+        config=cfg,
+        warnings=tuple(warnings),
+    )
+
+
 def regions_from_labels(
     labels: NDArray[np.integer],
     *,
@@ -912,6 +978,7 @@ __all__ = [
     "deduplicate_candidates",
     "detect_candidates",
     "detect_candidates_tiled",
+    "detection_from_probability",
     "detect_points",
     "detect_points_tiled",
     "estimate_response_threshold",

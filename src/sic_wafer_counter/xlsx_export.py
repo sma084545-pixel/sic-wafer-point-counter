@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 import math
 from pathlib import Path
 import re
-from typing import Callable, Iterable, Iterator, Sequence
+from typing import Callable, Iterable, Iterator, Mapping, Sequence
 from xml.sax.saxutils import escape, quoteattr
 import zipfile
 
@@ -31,6 +31,8 @@ class SheetSpec:
     column_widths: Sequence[float] = field(default_factory=tuple)
     title_rows: frozenset[int] = frozenset()
     header_rows: frozenset[int] = frozenset()
+    wrap_rows: frozenset[int] = frozenset()
+    row_heights: Mapping[int, float] = field(default_factory=dict)
     freeze_rows: int = 0
     auto_filter_ref: str | None = None
 
@@ -70,6 +72,8 @@ def _style_for(value: CellValue, row_number: int, spec: SheetSpec) -> int:
         return 1
     if row_number in spec.header_rows:
         return 2
+    if row_number in spec.wrap_rows and isinstance(value, str):
+        return 5
     if isinstance(value, bool):
         return 0
     if isinstance(value, int):
@@ -124,7 +128,13 @@ def _worksheet_chunks(spec: SheetSpec) -> Iterator[bytes]:
             _cell_xml(value, row_number, column_index, spec)
             for column_index, value in enumerate(row)
         )
-        height = ' ht="26" customHeight="1"' if row_number in spec.title_rows else ""
+        requested_height = spec.row_heights.get(row_number)
+        if requested_height is not None:
+            height = f' ht="{max(12.0, min(float(requested_height), 120.0)):.1f}" customHeight="1"'
+        elif row_number in spec.title_rows:
+            height = ' ht="26" customHeight="1"'
+        else:
+            height = ""
         yield f'<row r="{row_number}"{height}>{cells}</row>'.encode("utf-8")
     yield b"</sheetData>"
     if spec.auto_filter_ref:
@@ -151,12 +161,13 @@ _STYLES_XML = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <border><left style="thin"><color rgb="FFCBD8D6"/></left><right style="thin"><color rgb="FFCBD8D6"/></right><top style="thin"><color rgb="FFCBD8D6"/></top><bottom style="thin"><color rgb="FFCBD8D6"/></bottom><diagonal/></border>
   </borders>
   <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-  <cellXfs count="5">
+  <cellXfs count="6">
     <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
     <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="left" vertical="center"/></xf>
     <xf numFmtId="0" fontId="2" fillId="3" borderId="1" xfId="0" applyAlignment="1"><alignment horizontal="center" vertical="center" wrapText="1"/></xf>
     <xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
     <xf numFmtId="1" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment vertical="top" wrapText="1"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>"""

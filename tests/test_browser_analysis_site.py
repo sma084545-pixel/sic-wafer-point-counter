@@ -45,7 +45,7 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
 
     assert parser.h1_count == 1
     assert parser.form_count == 1
-    assert {"image-file", "classifier-file", "diameter", "edge-exclusion", "watershed"} <= set(parser.inputs)
+    assert {"image-file", "classifier-file", "pixel-classifier-file", "diameter", "edge-exclusion", "watershed"} <= set(parser.inputs)
     assert "原始 <code>File</code> 以只读方式挂载" in html
     assert "不在主线程整体读取，也不上传到网站服务器" in html
     assert "选择上限 100 MiB" in html
@@ -78,6 +78,7 @@ def test_worker_calls_packaged_pipeline_and_keeps_browser_limits_explicit() -> N
     assert 'config["output"]["generate_paper_aligned_figure"] = True' in worker
     assert 'config["output"]["save_candidate_crops"] = False' in worker
     assert 'config["classifier"]["model"] = classifier_model' in worker
+    assert 'config["pixel_classifier"]["model"] = pixel_classifier_model' in worker
     assert "analysis_quantized_to_uint8" not in worker or '"candidate_crops_saved": False' in worker
     assert "jsdelivr.net/pyodide/v${version}/full/" in worker
     assert "fetchVerifiedWheel" in worker and 'crypto.subtle.digest("SHA-256"' in worker
@@ -90,6 +91,7 @@ def test_browser_transfers_file_directly_and_worker_mounts_it_read_only() -> Non
 
     assert "worker.postMessage({ type: \"analyze\", file: runFile, options })" in main
     assert "classifier_model: await readClassifierModel()" in main
+    assert "pixel_classifier_model: await readPixelClassifierModel()" in main
     assert ".arrayBuffer(" not in main
     assert "fileBuffer" not in main
     assert "WORKERFS" in worker
@@ -98,6 +100,39 @@ def test_browser_transfers_file_directly_and_worker_mounts_it_read_only() -> Non
     assert "message.fileBuffer" not in worker
     assert "new Uint8Array(message.fileBuffer)" not in worker
     assert "FS.writeFile(inputPath" not in worker
+
+
+def test_browser_pixel_training_page_is_a_real_source_label_training_loop() -> None:
+    html = (DOCS / "train.html").read_text(encoding="utf-8")
+    main = (DOCS / "assets" / "pixel-training.js").read_text(encoding="utf-8")
+    worker = (DOCS / "assets" / "pixel-training-worker.mjs").read_text(encoding="utf-8")
+
+    for identifier in (
+        "source-file", "overview-canvas", "annotation-canvas", "brush-size",
+        "undo", "redo", "toggle-labels", "clear-class", "train-model",
+        "probability-preview", "segmentation-preview", "overlay-preview",
+        "save-project", "download-project", "project-file", "model-file", "download-model",
+    ):
+        assert f'id="{identifier}"' in html
+    assert "目标/前景" in html and "背景/伪影" in html and "忽略/不确定" in html
+    assert "32–1024 px" in html and "用户监督" in html
+    assert "Web Worker" in html
+    assert "encodeRle" in main and "decodeRle" in main
+    assert "imagePoint" in main and "state.panX" in main and "state.zoom" in main
+    assert "WORKERFS" in worker and "FS.mount(workerfs,{files:[file]}" in worker
+    assert "train_pixel_classifier" in worker
+    assert "predict_pixel_probability" in worker
+    assert "probability_to_mask" in worker
+    assert "validate_pixel_model" in worker and "validate_training_project" in worker
+    assert "training_project_sha256" in worker
+    assert "PixelTrainingSample" in worker
+    assert "absolute" not in " ".join(
+        line for line in worker.splitlines() if "PixelTrainingSample(" in line
+    )
+    assert "source_image\"][\"sha256\"]!=expected_hash" in worker
+    assert "file.arrayBuffer" not in main
+    assert '$("#download-project").disabled=false' in main
+    assert "target" in main and "background" in main
 
 
 def test_worker_tiff_preflight_uses_axes_and_forces_bounded_tiling() -> None:
@@ -171,7 +206,7 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
 
     project_wheel = runtime / manifest["package_wheel"]["file"]
-    assert project_wheel.name == "sic_wafer_point_counter-0.3.1-py3-none-any.whl"
+    assert project_wheel.name == "sic_wafer_point_counter-0.4.0-py3-none-any.whl"
     with zipfile.ZipFile(project_wheel) as archive:
         packaged_names = set(archive.namelist())
         packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")
@@ -193,6 +228,8 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         ).decode("utf-8")
     assert {
         "sic_wafer_counter/candidate_classifier.py",
+        "sic_wafer_counter/pixel_classifier.py",
+        "sic_wafer_counter/pixel_training_repository.py",
         "sic_wafer_counter/local_field_export.py",
         "sic_wafer_counter/result_export.py",
         "sic_wafer_counter/xlsx_export.py",

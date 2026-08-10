@@ -113,6 +113,16 @@ classifier:
   model_path:
   model:
 
+# Optional pixel-level expert-supervised model trained from source-image brush
+# labels. It proposes foreground pixels; valid-mask, edge and morphology rules
+# remain hard safeguards. Its output is an image class, not proof of TSD/TED/BPD.
+pixel_classifier:
+  enabled: false
+  model_path:
+  model:
+  probability_threshold:  # null uses the threshold stored in the model
+  minimum_object_area_px:  # null uses the minimum stored in the model
+
 output:
   save_intermediates: true
   draw_labels: true
