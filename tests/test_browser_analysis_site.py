@@ -45,7 +45,9 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
 
     assert parser.h1_count == 1
     assert parser.form_count == 1
-    assert {"image-file", "classifier-file", "pixel-classifier-file", "diameter", "edge-exclusion", "watershed"} <= set(parser.inputs)
+    assert {"image-file", "classifier-file", "pixel-classifier-file", "analysis-profile", "diameter", "edge-exclusion", "watershed"} <= set(parser.inputs)
+    assert "R40-b2 标准红框校准" in html
+    assert "不能证明 TSD/TED/BPD" in html
     assert "原始 <code>File</code> 以只读方式挂载" in html
     assert "不在主线程整体读取，也不上传到网站服务器" in html
     assert "选择上限 100 MiB" in html
@@ -70,6 +72,8 @@ def test_browser_page_has_real_upload_outputs_and_scientific_boundary() -> None:
 def test_worker_calls_packaged_pipeline_and_keeps_browser_limits_explicit() -> None:
     worker = (DOCS / "assets" / "analysis-worker.mjs").read_text(encoding="utf-8")
     assert "from sic_wafer_counter.pipeline import analyze_image" in worker
+    assert "from sic_wafer_counter.calibration_profiles import apply_calibration_profile" in worker
+    assert 'config = apply_calibration_profile(config, options.get("analysis_profile"))' in worker
     assert "result = analyze_image(" in worker
     assert 'config["output"]["generate_defect_comparison"] = True' in worker
     assert 'config["output"]["generate_xrt_red_box_overlay"] = True' in worker
@@ -206,7 +210,7 @@ def test_browser_runtime_manifest_matches_published_wheels() -> None:
         assert hashlib.sha256(wheel.read_bytes()).hexdigest() == entry["sha256"]
 
     project_wheel = runtime / manifest["package_wheel"]["file"]
-    assert project_wheel.name == "sic_wafer_point_counter-0.4.0-py3-none-any.whl"
+    assert project_wheel.name == "sic_wafer_point_counter-0.4.1-py3-none-any.whl"
     with zipfile.ZipFile(project_wheel) as archive:
         packaged_names = set(archive.namelist())
         packaged_image_io = archive.read("sic_wafer_counter/image_io.py").decode("utf-8")

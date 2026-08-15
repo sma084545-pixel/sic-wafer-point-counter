@@ -127,6 +127,12 @@
               <fieldset>
                 <legend>基础参数</legend>
                 <div class="field-grid">
+                  <label for="analysis-profile">分析校准配置</label>
+                  <select id="analysis-profile" name="analysis_profile">
+                    {% for profile in analysis_profiles %}
+                    <option value="{{ profile.profile_id }}"{% if profile.profile_id == 'generic_transparent_rules' %} selected{% endif %}>{{ profile.display_name }}</option>
+                    {% endfor %}
+                  </select>
                   <label for="wafer-diameter">晶圆实际直径（mm）</label>
                   <input id="wafer-diameter" name="wafer_diameter_mm" type="number" min="0.001" step="any" value="100" required>
                   <label for="exclude-edge">排除边缘宽度（mm）</label>
@@ -138,6 +144,7 @@
                     <option value="quantile">分位数阈值</option>
                   </select>
                 </div>
+                <p class="form-note" id="analysis-profile-note">通用规则未针对当前设备校准；R40-b2 配置仅来自一片晶圆的红框标注，不能证明物理位错类别。</p>
                 <label class="check-row" for="use-watershed">
                   <input id="use-watershed" name="use_watershed" type="checkbox" value="true" checked>
                   <span><strong>启用保守分水岭</strong><small>尝试分离互相接触且具有多个可靠距离峰的候选</small></span>

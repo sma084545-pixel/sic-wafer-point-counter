@@ -10,6 +10,11 @@ from pathlib import Path
 from typing import Sequence
 
 from . import __version__
+from .calibration_profiles import (
+    GENERIC_PROFILE_ID,
+    STANDARD_R40_B2_PROFILE_ID,
+    apply_calibration_profile,
+)
 from .image_io import ImageReadError
 from .pipeline import analyze_image
 from .utils import ConfigurationError, deep_merge, load_config, setup_logging
@@ -42,6 +47,12 @@ def _parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_CONFIG_PATH,
         help=f"YAML 参数文件（默认：{DEFAULT_CONFIG_PATH}）",
+    )
+    analyze.add_argument(
+        "--analysis-profile",
+        choices=(GENERIC_PROFILE_ID, STANDARD_R40_B2_PROFILE_ID),
+        default=GENERIC_PROFILE_ID,
+        help="选择可追溯的测量校准配置；默认保留通用透明规则",
     )
     analyze.add_argument("--wafer-diameter-mm", type=float, default=None, help="晶圆实际直径，默认读取配置（100 mm）")
     analyze.add_argument("--center-x", type=float, default=None, help="手工圆心 x（原图像素）")
@@ -91,7 +102,8 @@ def _effective_config(args: argparse.Namespace) -> dict:
         overrides.setdefault("detection", {})["use_watershed"] = False
     if args.verbose:
         overrides.setdefault("logging", {})["level"] = "DEBUG"
-    return deep_merge(config, overrides)
+    configured = deep_merge(config, overrides)
+    return apply_calibration_profile(configured, args.analysis_profile)
 
 
 def _run_analyze(args: argparse.Namespace) -> int:

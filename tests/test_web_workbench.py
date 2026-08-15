@@ -120,6 +120,7 @@ def test_browser_workbench_submits_real_analysis_and_serves_artifacts(
             assert "一次导出全部局部分析包 ZIP" in page.get_data(as_text=True)
             assert "一键导出 Cu-0008-R 顺序三联件 ZIP" in page.get_data(as_text=True)
             assert "专家标注与候选训练" in page.get_data(as_text=True)
+            assert "R40-b2 标准红框校准" in page.get_data(as_text=True)
             submit = client.post(
                 "/api/jobs",
                 data={

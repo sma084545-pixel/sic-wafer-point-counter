@@ -1196,6 +1196,7 @@ def generate_html_report(
         ("计数统计不确定度", ("uncertainty_display",)),
         ("95% 计数区间", ("confidence_interval_display",)),
         ("中心/中间/边缘密度", ("regional_density_display",)),
+        ("分析校准配置", ("analysis_profile_display",)),
         ("真实标注验证状态", ("real_annotation_validation_status",)),
         ("不确定度预算", ("uncertainty_budget_display",)),
         ("像素分割模型", ("pixel_classifier_display",)),
@@ -1224,6 +1225,14 @@ def generate_html_report(
     )
     display_summary["density_display"] = f"{float(rho):.6g} cm^-2" if rho is not None else "—"
     display_summary["uncertainty_display"] = f"± {float(sigma):.6g} cm^-2" if sigma is not None else "—"
+    analysis_profile = summary.get("analysis_profile")
+    if isinstance(analysis_profile, Mapping):
+        display_summary["analysis_profile_display"] = (
+            f"{analysis_profile.get('display_name', analysis_profile.get('profile_id', '—'))}; "
+            f"status={analysis_profile.get('status', '—')}"
+        )
+    else:
+        display_summary["analysis_profile_display"] = "generic defaults (profile metadata unavailable)"
     low = _summary_value(
         summary,
         "poisson_95_ci_lower_cm2",

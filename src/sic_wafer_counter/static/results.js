@@ -213,6 +213,8 @@ function renderMetadata(s) {
       ['模型留出验证', String(pick(s, 'candidate_classifier.validation_status') ?? '未提供')],
     ]],
     ['运行', [
+      ['分析校准配置', String(pick(s, 'analysis_profile.display_name') ?? '通用默认')],
+      ['校准状态', String(pick(s, 'analysis_profile.status') ?? '未提供')],
       ['处理模式', String(s.processing_mode ?? '未提供')],
       ['检测阈值', numeric(s.detection_threshold_value, '', {maximumFractionDigits: 6})],
       ['处理 tile 数', numeric(s.processed_tile_count, '', {maximumFractionDigits: 0})],

@@ -10,8 +10,37 @@ import pytest
 
 from sic_wafer_counter.feature_extraction import extract_candidate_features
 from sic_wafer_counter.pipeline import analyze_image
-from sic_wafer_counter.point_detection import detect_candidates
+from sic_wafer_counter.point_detection import (
+    DetectionConfig,
+    _conservative_watershed,
+    detect_candidates,
+)
 from sic_wafer_counter.preprocessing import preprocess_image
+from skimage.measure import label
+
+
+def test_fast_watershed_splits_touching_points_but_skips_ordinary_small_blob() -> None:
+    touching = np.zeros((41, 41), dtype=np.uint8)
+    cv2.circle(touching, (16, 20), 7, 1, thickness=-1)
+    cv2.circle(touching, (25, 20), 7, 1, thickness=-1)
+    config = DetectionConfig(
+        min_area_px=5,
+        max_area_px=500,
+        use_watershed=True,
+        min_peak_distance_px=5,
+        watershed_min_component_area_px=20,
+    ).validated()
+    split = _conservative_watershed(
+        label(touching.astype(bool), connectivity=2).astype(np.int32), config
+    )
+    assert int(split.max()) == 2
+
+    ordinary = np.zeros((15, 15), dtype=np.uint8)
+    cv2.circle(ordinary, (7, 7), 2, 1, thickness=-1)
+    unchanged = _conservative_watershed(
+        label(ordinary.astype(bool), connectivity=2).astype(np.int32), config
+    )
+    assert int(unchanged.max()) == 1
 
 
 def test_line_is_not_split_into_many_accepted_points(default_config) -> None:
@@ -69,4 +98,3 @@ def test_outside_and_excluded_edge_points_are_not_counted(tmp_path, default_conf
     assert len(accepted) == 1
     assert accepted.iloc[0]["centroid_x_px"] == pytest.approx(300.0, abs=2.0)
     assert accepted.iloc[0]["centroid_y_px"] == pytest.approx(300.0, abs=2.0)
-

@@ -37,7 +37,16 @@ const elements = {
   analysisClassifierStatus: document.querySelector('#analysis-classifier-status'),
   usePixelClassifier: document.querySelector('#use-pixel-classifier'),
   analysisPixelClassifierStatus: document.querySelector('#analysis-pixel-classifier-status'),
+  analysisProfile: document.querySelector('#analysis-profile'),
+  watershed: document.querySelector('#use-watershed'),
 };
+
+function syncAnalysisProfileControls() {
+  const calibrated = elements.analysisProfile?.value === 'cn4n82006412_r40_b2_standard_20260815';
+  if (!elements.watershed) return;
+  if (calibrated) elements.watershed.checked = false;
+  elements.watershed.disabled = calibrated;
+}
 
 function announce(message) {
   elements.live.textContent = '';
@@ -281,6 +290,8 @@ function updateFileLabel() {
 }
 
 elements.fileInput.addEventListener('change', updateFileLabel);
+elements.analysisProfile?.addEventListener('change', syncAnalysisProfileControls);
+syncAnalysisProfileControls();
 elements.dropZone.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();

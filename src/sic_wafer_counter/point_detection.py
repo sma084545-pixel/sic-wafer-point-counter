@@ -11,7 +11,7 @@ import cv2
 import numpy as np
 from numpy.typing import NDArray
 from scipy.spatial import cKDTree
-from skimage.feature import blob_dog, peak_local_max
+from skimage.feature import blob_dog
 from skimage.filters import threshold_multiotsu
 from skimage.measure import label, regionprops
 from skimage.segmentation import watershed
@@ -395,6 +395,76 @@ def _clean_mask(mask: BoolImage, config: DetectionConfig) -> BoolImage:
     return np.asarray(keep[component_labels], dtype=bool)
 
 
+def _distance_peak_coordinates(
+    distance: FloatImage,
+    component: BoolImage,
+    *,
+    min_distance: int,
+    threshold_abs: float,
+    max_peaks: int,
+) -> NDArray[np.int64]:
+    """Return deterministic distance peaks without one KD-tree per component.
+
+    ``skimage.feature.peak_local_max`` is convenient for a handful of large
+    objects, but its spacing stage builds a KD-tree for every eligible
+    component.  A high-density XRT field can contain tens of thousands of
+    ordinary small components, making that overhead dominate the entire run.
+    A square max filter implements the same Chebyshev neighbourhood used by
+    the prior call.  Flat maxima are collapsed deterministically and the small
+    remaining list is greedily spaced.
+    """
+
+    radius = int(min_distance)
+    if radius < 1 or int(max_peaks) < 1:
+        return np.empty((0, 2), dtype=np.int64)
+    kernel_size = 2 * radius + 1
+    local_maximum = cv2.dilate(
+        np.asarray(distance, dtype=np.float32),
+        np.ones((kernel_size, kernel_size), dtype=np.uint8),
+    )
+    peak_mask = (
+        np.asarray(component, dtype=bool)
+        & (distance >= float(threshold_abs))
+        & np.isclose(distance, local_maximum, rtol=0.0, atol=1e-7)
+    )
+    plateau_count, plateau_labels = cv2.connectedComponents(
+        peak_mask.astype(np.uint8), connectivity=8
+    )
+    proposals: list[tuple[float, int, int]] = []
+    for plateau_id in range(1, int(plateau_count)):
+        rows, columns = np.nonzero(plateau_labels == plateau_id)
+        if not len(rows):
+            continue
+        values = distance[rows, columns]
+        maximum = float(values.max(initial=0.0))
+        tied = np.flatnonzero(np.isclose(values, maximum, rtol=0.0, atol=1e-7))
+        # Prefer the point nearest the plateau centroid, then use row/column
+        # order as a reproducible final tie breaker.
+        center_row = float(rows.mean())
+        center_column = float(columns.mean())
+        choice = min(
+            tied.tolist(),
+            key=lambda item: (
+                (float(rows[item]) - center_row) ** 2
+                + (float(columns[item]) - center_column) ** 2,
+                int(rows[item]),
+                int(columns[item]),
+            ),
+        )
+        proposals.append((maximum, int(rows[choice]), int(columns[choice])))
+    selected: list[tuple[int, int]] = []
+    for _, row, column in sorted(proposals, key=lambda value: (-value[0], value[1], value[2])):
+        if any(
+            max(abs(row - kept_row), abs(column - kept_column)) < radius
+            for kept_row, kept_column in selected
+        ):
+            continue
+        selected.append((row, column))
+        if len(selected) >= int(max_peaks):
+            break
+    return np.asarray(selected, dtype=np.int64).reshape(-1, 2)
+
+
 def _conservative_watershed(
     component_labels: LabelImage, config: DetectionConfig
 ) -> LabelImage:
@@ -424,23 +494,25 @@ def _conservative_watershed(
             and bbox_aspect <= config.watershed_max_aspect_ratio
             and region.eccentricity <= config.watershed_max_eccentricity
             and circularity >= config.watershed_min_component_circularity
+            # No two peaks can satisfy the requested spacing when both bbox
+            # dimensions are no larger than ``min_peak_distance_px``.
+            and max(height, width) > config.min_peak_distance_px
         )
         local_labels: LabelImage | None = None
         if eligible:
             distance = cv2.distanceTransform(component.astype(np.uint8), cv2.DIST_L2, 5)
             max_distance = float(distance.max(initial=0.0))
             if max_distance > 0.0:
-                peaks = peak_local_max(
+                max_peaks = max(1, int(math.ceil(region.area / config.min_area_px)))
+                peaks = _distance_peak_coordinates(
                     distance,
+                    component,
                     min_distance=config.min_peak_distance_px,
                     threshold_abs=max_distance * config.watershed_min_peak_rel_height,
-                    labels=component.astype(np.uint8),
-                    exclude_border=False,
+                    max_peaks=max_peaks,
                 )
                 # Area limits the number of plausible objects.  It is a second
                 # guard against noisy distance ridges causing over-segmentation.
-                max_peaks = max(1, int(math.ceil(region.area / config.min_area_px)))
-                peaks = peaks[:max_peaks]
                 if len(peaks) >= 2:
                     markers = np.zeros(component.shape, dtype=np.int32)
                     for marker_id, (row, col) in enumerate(peaks, start=1):

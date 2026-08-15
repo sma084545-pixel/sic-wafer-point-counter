@@ -1111,7 +1111,13 @@ def analyze_image(
             "poisson_count_95_ci": [density.count_ci_lower, density.count_ci_upper],
             "counting_uncertainty_scope": COUNTING_UNCERTAINTY_NOTE,
             "scientific_interpretation_limit": SCIENTIFIC_LIMITATION_ZH,
-            "real_annotation_validation_status": "not validated on real SiC data",
+            "analysis_profile": copy.deepcopy(config.get("analysis_profile", {})),
+            "real_annotation_validation_status": (
+                "single-wafer image-annotation internal calibration; no independent physical validation"
+                if config.get("analysis_profile", {}).get("status")
+                == "single_wafer_spatial_internal_calibration"
+                else "not validated on real SiC data"
+            ),
             "paper_reference_alignment": {
                 "automatic_xrt_marker": "red rectangle",
                 "independent_reference_marker": "yellow circle",
@@ -1130,7 +1136,12 @@ def analyze_image(
                     if pixel_model is not None or classifier_model is not None
                     else "not quantified: no real SiC expert-label validation"
                 ),
-                "parameter_sensitivity": "not quantified: no calibration-wafer sensitivity run",
+                "parameter_sensitivity": (
+                    "local threshold sweep recorded in the selected single-wafer calibration profile"
+                    if config.get("analysis_profile", {}).get("status")
+                    == "single_wafer_spatial_internal_calibration"
+                    else "not quantified: no calibration-wafer sensitivity run"
+                ),
                 "area_calibration": "not quantified: no diameter/pixel/mask-boundary uncertainty supplied",
                 "spatial_heterogeneity": "descriptive spatial outputs only; no multi-wafer inference",
             },

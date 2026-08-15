@@ -64,11 +64,13 @@
         <fieldset>
           <legend>物理标定与检测</legend>
           <div class="field-grid">
+            <label><span>分析校准配置</span><select id="analysis-profile"><option value="generic_transparent_rules" selected>通用透明规则（未校准）</option><option value="cn4n82006412_r40_b2_standard_20260815">R40-b2 标准红框校准（2026-08-15）</option></select></label>
             <label><span>晶圆直径（mm）</span><input id="diameter" type="number" value="100" min="0.001" step="any" required></label>
             <label><span>外缘排除（mm）</span><input id="edge-exclusion" type="number" value="0" min="0" step="0.1" required></label>
             <label><span>候选阈值</span><select id="threshold-method"><option value="otsu">多类 Otsu（默认）</option><option value="adaptive">自适应阈值</option><option value="quantile">响应分位数</option></select></label>
             <label class="check-field"><input id="watershed" type="checkbox" checked><span>分水岭分离粘连点</span></label>
           </div>
+          <p class="note">R40-b2 配置仅基于一片晶圆的红框图像标注；它用于减少当前成像条件下的偏高计数，不能证明 TSD/TED/BPD 物理身份。</p>
           <label class="classifier-file" for="pixel-classifier-file">
             <span>可选：导入图像交互训练得到的像素分割模型 JSON</span>
             <input id="pixel-classifier-file" type="file" accept=".json,application/json">

@@ -57,6 +57,7 @@ sic_wafer_point_counter/
 │   ├── reporting.py
 │   ├── validation.py
 │   ├── candidate_classifier.py # 可移植的候选级专家训练模型
+│   ├── calibration_profiles.py # 可追溯、可选的设备/成像校准配置
 │   ├── training_repository.py  # 本机标注、共识、拆分与模型管理
 │   ├── pixel_classifier.py     # 多尺度特征、像素随机森林、预测与验证
 │   ├── pixel_training_repository.py # 原图、ROI 标签、项目与模型持久化
@@ -241,6 +242,17 @@ python -m sic_wafer_counter.cli analyze \
   --exclude-edge-mm 1.0
 ```
 
+对与 `CN4N82006412-SiC-0008` 相同的 R40-b2 成像条件，可显式选用单晶圆红框标注校准：
+
+```bash
+python -m sic_wafer_counter.cli analyze \
+  "/path/to/SiC_wafer.tif" \
+  --output results/sample_r40_b2 \
+  --analysis-profile cn4n82006412_r40_b2_standard_20260815
+```
+
+该配置使用多类 Otsu 后 `threshold_offset=0.030`，并关闭在这组高密度标注中未改善 F1 的分水岭。它是针对指定成像条件的内部校准，不是所有 SiC/XRT 图像的通用默认。
+
 `--exclude-edge-mm` 的默认值在 `config/default.yaml` 中明确为 **0 mm**；程序不会偷偷丢掉边缘数据。需要禁用分水岭时加 `--no-watershed`，临时切换阈值可用 `--threshold-method otsu|adaptive|quantile`。
 
 ## 如何准备图像
@@ -383,6 +395,10 @@ low_solidity, low_contrast, near_wafer_edge, outside_valid_mask
 
 阈值校准的目标应由研究用途决定：若漏检代价更高，可以提高 recall 后加强人工复核；若假阳性代价更高，则提高 precision，但要诚实报告漏检风险。
 
+### R40-b2 单晶圆标准数据校准
+
+2026-08-15 提供的 `CN4N82006412-SiC-0008/定量识别统计1` 包含一张 6800×6802 的 16 位原始 XRT TIFF、一张 10000×10000 总图和 25 张 2000×2000 蛇形扫描红框分块。数据质量核对得到 21,350 个清晰闭合矩形参考区，另有 1,321 个因框重叠而形成的非矩形区域仅作 ignore，不当正例或负例。六个校准视场上对少数关键阈值做局部扫描，再在同一晶圆上 15 个未参与选参的空间视场复核。选定配置的同晶圆空间留出结果为 precision 0.940、recall 0.843、F1 0.889；它只说明与这批图像红框的一致性，不是跨晶圆真实准确率。证据、哈希和限制见 [R40-b2 校准记录](docs/calibration_r40_b2_20260815.md)。
+
 真实 SiC 标注验证使用 `scripts/validate_real_annotations.py`；未传入标注时，它只会生成版本化 CSV 模板和 `not validated on real SiC data` 状态，不会伪造真实 precision、recall、F1 或分类不确定度。标注格式、双标注者仲裁、按 `wafer_id` 拆分 calibration/validation/locked test 与不确定度边界见 [真实标注协议](docs/real_annotation_protocol.md)。
 
 空间分布输出使用最终有效掩膜的实际面积，而不是理想圆环面积。二维热图同样计算 `rho_ij = n_ij / S_valid,ij`，零有效面积格为 NA；边缘低有效面积格可只在显示层隐藏，完整数值仍写入 `density_heatmap_grid.csv`。热图网格总面积和总 count 会与主结果核对，色标、分格和截断状态写入摘要。径向与角向输出包括：`radial_density.csv/png`、`angular_density.csv/png` 和 `regional_density.csv` 分别给出径向、方位角以及 center/middle/edge 的 count、有效面积、密度和泊松区间。默认径向为 `equal_area` 分箱；方位角参考只是图像正 x 轴，未统一晶圆方向时不能解释为晶向。可作为论文 Methods 初稿的操作规则见 [测量协议](docs/measurement_protocol.md)。
@@ -505,7 +521,7 @@ pytest -q
 - 自动无效区目前依赖明显图像规则和配置；复杂遮挡、手写标记或未知设备伪影可能需要人工掩膜。
 - 平边/缺口过大、圆周出框或输入只是内部裁片时，自动圆拟合可能不可靠，必须人工标定。
 - 分水岭只能分开有可辨距离峰的粘连点；完全重叠或严重模糊的点没有足够图像信息。
-- 默认阈值尚未经过导师标注的真实 SiC 数据校准，不能直接作为论文中的普适判据或性能结论。
+- 通用默认阈值尚未经过跨晶圆真实 SiC 专家验证；R40-b2 配置也只是单晶圆图像标注校准，两者都不能直接作为论文中的普适判据或性能结论。
 - 程序不会声称“每个识别点一定是一条真实位错”。报告始终使用“当前判定标准下的点状缺陷/点状目标”措辞。
 
 接入真实图像时，最好同时提供：原始未压缩或无损图、图像是否为整片晶圆、像素/物理标尺或设备几何、晶圆圆周/平边/缺口信息、需要排除的边缘宽度、已知遮挡/文字/标尺区域、典型点直径范围（px 或 µm）、材料专家逐点接受/拒绝标注，以及至少一批不参与调参的独立验证图。若多张图只覆盖局部视场，还需要每张视场在晶圆上的位置与有效视场掩膜，不能把局部面积误当作整片面积。

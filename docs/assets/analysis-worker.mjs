@@ -402,6 +402,7 @@ from pathlib import Path
 import yaml
 
 from sic_wafer_counter.pipeline import analyze_image
+from sic_wafer_counter.calibration_profiles import apply_calibration_profile
 from sic_wafer_counter.reporting import generate_html_report, write_summary_files
 
 options = json.loads(browser_options_json)
@@ -414,6 +415,7 @@ config["wafer"]["diameter_mm"] = float(options["wafer_diameter_mm"])
 config["wafer"]["exclude_edge_mm"] = float(options["exclude_edge_mm"])
 config["detection"]["threshold_method"] = str(options["threshold_method"])
 config["detection"]["use_watershed"] = bool(options["use_watershed"])
+config = apply_calibration_profile(config, options.get("analysis_profile"))
 config["output"]["save_candidate_crops"] = False
 config["output"]["save_intermediates"] = True
 config["output"]["generate_html_report"] = True

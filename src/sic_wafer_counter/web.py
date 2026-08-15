@@ -30,6 +30,7 @@ from werkzeug.exceptions import RequestEntityTooLarge
 from werkzeug.utils import secure_filename
 
 from . import __version__
+from .calibration_profiles import apply_calibration_profile, available_profiles
 from .image_io import ImageReadError
 from .pipeline import analyze_image
 from .pixel_training_repository import (
@@ -167,7 +168,9 @@ def _analysis_config_from_form(form: Mapping[str, str]) -> tuple[dict[str, Any],
         raise ValueError("手工标定时必须同时填写圆心 x、圆心 y 与半径")
     if manual[2] is not None and manual[2] <= 0:
         raise ValueError("手工半径必须大于零")
-    return deep_merge(config, overrides), manual
+    configured = deep_merge(config, overrides)
+    configured = apply_calibration_profile(configured, form.get("analysis_profile"))
+    return configured, manual
 
 
 class _JobManager:
@@ -391,6 +394,7 @@ def create_app(
             software_version=__version__,
             git_revision=_git_revision(root),
             demo_available={name: path.is_file() for name, path in demo_sources.items()},
+            analysis_profiles=available_profiles(),
         )
 
     @app.get("/pixel-training")

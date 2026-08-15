@@ -130,12 +130,20 @@ function readOptions() {
     throw new Error("外缘排除必须非负，且小于晶圆半径。 ");
   }
   return {
+    analysis_profile: document.querySelector("#analysis-profile").value,
     wafer_diameter_mm: diameter,
     exclude_edge_mm: exclusion,
     threshold_method: document.querySelector("#threshold-method").value,
     use_watershed: document.querySelector("#watershed").checked,
     manual_geometry: supplied === 3 ? { center_x: Number(values[0]), center_y: Number(values[1]), radius_px: Number(values[2]) } : null,
   };
+}
+
+function syncAnalysisProfileControls() {
+  const calibrated = document.querySelector("#analysis-profile").value === "cn4n82006412_r40_b2_standard_20260815";
+  const watershed = document.querySelector("#watershed");
+  if (calibrated) watershed.checked = false;
+  watershed.disabled = calibrated;
 }
 
 async function readClassifierModel() {
@@ -368,6 +376,8 @@ cancelButton.addEventListener("click", () => {
   results.hidden = true;
   setStatus("", "本次运行已取消", "临时运行环境已释放；所选文件和参数已保留，可以重新开始。", 0);
 });
+document.querySelector("#analysis-profile").addEventListener("change", syncAnalysisProfileControls);
+syncAnalysisProfileControls();
 form.addEventListener("submit", runAnalysis);
 window.addEventListener("pagehide", () => { stopWorker(); cleanupObjectUrls(); });
 
